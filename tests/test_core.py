@@ -9,8 +9,9 @@ SAMPLE_CONFIG = {
     "catalog_type": "sql",
     "catalog_name": CATALOG_NAME,
     "catalog_uri": ICEBERG_DB_URI,
-    "warehouse": ICEBERG_WAREHOUSE,
-    "catalog_properties": {},
+    "catalog_properties": {
+        "warehouse": ICEBERG_WAREHOUSE,
+    },
 }
 
 
