@@ -25,7 +25,7 @@ def pyarrow_to_jsonschema_type(arrow_type: DataType) -> th.JSONTypeHelper:
         return th.DurationType()
     elif pa.types.is_decimal(arrow_type):
         return th.NumberType()
-    elif pa.types.is_list(arrow_type):
+    elif pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type):
         return th.ArrayType(pyarrow_to_jsonschema_type(arrow_type.value_type))
     elif pa.types.is_struct(arrow_type):
         return th.ObjectType(

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import sys
-from typing import TYPE_CHECKING, Iterable
+from datetime import date, datetime
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from singer_sdk import Stream  # JSON Schema typing helpers
 
@@ -38,11 +39,33 @@ class IcebergTableStream(Stream):
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
         context = context or {}
         """Return a generator of record-type dictionary objects."""
-        scan = self.iceberg_table.scan()
-
-        # Create an Arrow RecordBatchReader.
-        batch_reader = scan.to_arrow_batch_reader()
-
-        # Iterate over batches and yield records.
+        batch_reader = self.iceberg_table.scan().to_arrow_batch_reader()
+        formatters = self._create_formatters()
         for batch in batch_reader:
-            yield from batch.to_pylist()
+            records = batch.to_pylist()
+            for record in records:
+                yield self._format_record(record, formatters)
+
+    def _create_formatters(self) -> dict[str, Callable[[Any], Any]]:
+        formatters = {}
+        for field, schema in self.schema["properties"].items():
+            if schema.get("format") == "date" and schema["type"] == ["string", "null"]:
+                formatters[field] = lambda x: self._format_date(x)
+            elif "null" in schema["type"]:
+                formatters[field] = lambda x: x if x is not None else None
+            else:
+                formatters[field] = lambda x: x
+        return formatters
+
+    def _format_date(self, value: str | date | datetime | None) -> str | None:
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()[:10]
+        elif isinstance(value, str):
+            return value[:10]
+        else:
+            return None
+
+    def _format_record(
+        self, record: dict[str, Any], formatters: dict[str, Callable[[Any], Any]]
+    ) -> dict[str, Any]:
+        return {field: formatters[field](value) for field, value in record.items()}
