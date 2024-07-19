@@ -6,6 +6,7 @@ import sys
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
+from pyiceberg.expressions import AlwaysTrue, GreaterThanOrEqual
 from singer_sdk import Stream  # JSON Schema typing helpers
 
 from tap_iceberg.utils import generate_schema_from_pyarrow
@@ -37,9 +38,14 @@ class IcebergTableStream(Stream):
         self.iceberg_table = iceberg_table
 
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
-        context = context or {}
         """Return a generator of record-type dictionary objects."""
-        batch_reader = self.iceberg_table.scan().to_arrow_batch_reader()
+        filter_expression = AlwaysTrue()
+        if context and self.get_starting_replication_key_value(context):
+            start_value = self.get_starting_replication_key_value(context)
+            filter_expression = GreaterThanOrEqual(self.replication_key, start_value)
+        batch_reader = self.iceberg_table.scan(
+            row_filter=filter_expression,
+        ).to_arrow_batch_reader()
         formatters = self._create_formatters()
         for batch in batch_reader:
             records = batch.to_pylist()
