@@ -8,8 +8,8 @@ from tests.generate_test_data import CATALOG_NAME, ICEBERG_DB_URI, ICEBERG_WAREH
 SAMPLE_CONFIG = {
     "catalog_type": "sql",
     "catalog_name": CATALOG_NAME,
-    "catalog_uri": ICEBERG_DB_URI,
     "catalog_properties": {
+        "uri": ICEBERG_DB_URI,
         "warehouse": ICEBERG_WAREHOUSE,
     },
 }
