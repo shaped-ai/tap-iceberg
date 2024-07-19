@@ -23,14 +23,8 @@ class TapIceberg(Tap):
         th.Property(
             "catalog_name",
             th.StringType,
-            required=False,
-            description="The name of the Iceberg catalog",
-        ),
-        th.Property(
-            "catalog_uri",
-            th.StringType,
             required=True,
-            description="The URI of the Iceberg catalog",
+            description="The name of the Iceberg catalog",
         ),
         th.Property(
             "catalog_type",
@@ -73,7 +67,6 @@ class TapIceberg(Tap):
         catalog_properties = self.config.get("catalog_properties", {})
         catalog_properties.update(
             {
-                "uri": self.config["catalog_uri"],
                 "type": self.config["catalog_type"],
             }
         )
