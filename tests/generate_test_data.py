@@ -4,6 +4,8 @@ import pyarrow as pa
 from faker import Faker
 from pyiceberg.catalog import load_catalog
 from pyiceberg.schema import Schema
+from pyiceberg.table.sorting import SortField, SortOrder
+from pyiceberg.transforms import IdentityTransform
 from pyiceberg.types import (
     BooleanType,
     DateType,
@@ -34,9 +36,12 @@ iceberg_schema = Schema(
         field_id=9,
         name="phone_numbers",
         field_type=ListType(
-            element_id=10, element_type=StringType(), element_required=False
+            element_id=11, element_type=StringType(), element_required=False
         ),
         required=False,
+    ),
+    NestedField(
+        field_id=10, name="updated_at", field_type=TimestampType(), required=True
     ),
 )
 
@@ -70,7 +75,17 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    table = catalog.create_table(identifier=TABLE_IDENTIFIER, schema=iceberg_schema)
+    sort_order = SortOrder(
+        SortField(
+            source_id=10,
+            transform=IdentityTransform(),
+            direction="desc",
+            null_order="nulls-first",
+        )
+    )
+    table = catalog.create_table(
+        identifier=TABLE_IDENTIFIER, schema=iceberg_schema, sort_order=sort_order
+    )
 
     # Generate test data using Faker
     rows = []
@@ -87,6 +102,7 @@ if __name__ == "__main__":
             "phone_numbers": [
                 fake.phone_number() for _ in range(fake.random_int(min=1, max=3))
             ],
+            "updated_at": fake.date_time_between(start_date="-1y", end_date="now"),
         }
         rows.append(row)
 
