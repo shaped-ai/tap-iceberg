@@ -113,6 +113,11 @@ class TapIceberg(Tap):
         if self.config.get("client_region"):
             catalog_properties["client.region"] = self.config["client_region"]
 
+        self.logger.info(
+            "Loading Iceberg catalog with properties: %s",
+            catalog_properties,
+        )
+
         return load_catalog(
             self.config.get("catalog_name"),
             **{
