@@ -99,15 +99,15 @@ class TapIceberg(Tap):
         )
 
         if self.config.get("client_access_key_id"):
-            catalog_properties["client.access_key_id"] = self.config[
+            catalog_properties["client.access-key-id"] = self.config[
                 "client_access_key_id"
             ]
         if self.config.get("client_secret_access_key"):
-            catalog_properties["client.secret_access_key"] = self.config[
+            catalog_properties["client.secret-access-key"] = self.config[
                 "client_secret_access_key"
             ]
         if self.config.get("client_session_token"):
-            catalog_properties["client.session_token"] = self.config[
+            catalog_properties["client.session-token"] = self.config[
                 "client_session_token"
             ]
         if self.config.get("client_region"):
