@@ -33,6 +33,33 @@ class TapIceberg(Tap):
             description="The type of Iceberg catalog (e.g., 'hive', 'rest', 'glue')",
         ),
         th.Property(
+            "client_access_key_id",
+            th.StringType,
+            required=False,
+            secret=True,
+            description="The AWS access key ID for accessing S3/Glue catalogs",
+        ),
+        th.Property(
+            "client_secret_access_key",
+            th.StringType,
+            required=False,
+            secret=True,
+            description="The AWS secret access key for accessing S3/Glue catalogs",
+        ),
+        th.Property(
+            "client_session_token",
+            th.StringType,
+            required=False,
+            secret=True,
+            description="The AWS session token for accessing S3/Glue catalogs",
+        ),
+        th.Property(
+            "client_region",
+            th.StringType,
+            required=False,
+            description="The AWS region for accessing S3/Glue catalogs",
+        ),
+        th.Property(
             "catalog_properties",
             th.ObjectType(additional_properties=th.StringType()),
             required=False,
@@ -70,6 +97,21 @@ class TapIceberg(Tap):
                 "type": self.config["catalog_type"],
             }
         )
+
+        if self.config.get("client_access_key_id"):
+            catalog_properties["client.access_key_id"] = self.config[
+                "client_access_key_id"
+            ]
+        if self.config.get("client_secret_access_key"):
+            catalog_properties["client.secret_access_key"] = self.config[
+                "client_secret_access_key"
+            ]
+        if self.config.get("client_session_token"):
+            catalog_properties["client.session_token"] = self.config[
+                "client_session_token"
+            ]
+        if self.config.get("client_region"):
+            catalog_properties["client.region"] = self.config["client_region"]
 
         return load_catalog(
             self.config.get("catalog_name"),
