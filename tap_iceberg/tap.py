@@ -78,11 +78,12 @@ class TapIceberg(Tap):
         for namespace in catalog.list_namespaces():
             for table in catalog.list_tables(namespace):
                 table_id = f"{table[0]}.{table[1]}"
+                tap_stream_id = f"{table[0]}-{table[1]}"
                 iceberg_table = catalog.load_table(table_id)
                 discovered_streams.append(
                     IcebergTableStream(
                         self,
-                        name=table_id,
+                        name=tap_stream_id,
                         iceberg_table=iceberg_table,
                     )
                 )
