@@ -53,13 +53,18 @@ class IcebergTableStream(Stream):
         """Return a generator of record-type dictionary objects."""
         filter_expression = AlwaysTrue()
         self.logger.info("Starting Iceberg table scan.")
-        if context and self.get_starting_replication_key_value(context):
-            start_value = self.get_starting_replication_key_value(context)
+        start_value = self.get_starting_replication_key_value(context)
+        if start_value:
             self.logger.info(
                 "Filtering records for replication key %s greater than %s.",
                 self.replication_key,
                 start_value,
             )
+            # Convert to timezone-less isoformat string.
+            if isinstance(start_value, str):
+                start_value = (
+                    datetime.fromisoformat(start_value).replace(tzinfo=None).isoformat()
+                )
             filter_expression = GreaterThan(self.replication_key, start_value)
         batch_reader = self._iceberg_table.scan(
             row_filter=filter_expression,

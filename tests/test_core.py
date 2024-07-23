@@ -20,3 +20,17 @@ TestTapIceberg = get_tap_test_class(
     tap_class=TapIceberg,
     config=SAMPLE_CONFIG,
 )
+
+# Run tap tests with state
+TestTapIcebergState = get_tap_test_class(
+    tap_class=TapIceberg,
+    config=SAMPLE_CONFIG,
+    state={
+        "bookmarks": {
+            "test_namespace-test_table": {
+                "replication_key": "updated_at",
+                "replication_key_value": "2024-07-23T00:00:00.000000+00:00",
+            }
+        }
+    },
+)
