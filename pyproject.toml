@@ -30,6 +30,7 @@ pyiceberg = { version = "0.7.0rc1", extras = ["pyarrow", "glue", "hive", "sql-sq
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.4.0"
+pyarrow = { version = ">=16.0.0", optional = true }
 singer-sdk = { version="~=0.38.0", extras = ["testing"] }
 
 [tool.poetry.extras]

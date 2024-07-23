@@ -35,7 +35,19 @@ class IcebergTableStream(Stream):
         """Initialize the stream."""
         schema = generate_schema_from_pyarrow(iceberg_table.schema().as_arrow())
         super().__init__(tap, schema, name)
-        self.iceberg_table = iceberg_table
+        self._iceberg_table = iceberg_table
+
+        sort_fields = self._iceberg_table.sort_order().fields
+        if len(sort_fields) == 1:
+            sort_field_source_id = sort_fields[0].source_id
+            sort_field_name = (
+                self._iceberg_table.schema().find_field(sort_field_source_id).name
+            )
+            self._replication_key = sort_field_name
+
+    @property
+    def is_sorted(self) -> bool:
+        return not self._iceberg_table.sort_order().is_unsorted
 
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
         """Return a generator of record-type dictionary objects."""
@@ -43,7 +55,7 @@ class IcebergTableStream(Stream):
         if context and self.get_starting_replication_key_value(context):
             start_value = self.get_starting_replication_key_value(context)
             filter_expression = GreaterThanOrEqual(self.replication_key, start_value)
-        batch_reader = self.iceberg_table.scan(
+        batch_reader = self._iceberg_table.scan(
             row_filter=filter_expression,
         ).to_arrow_batch_reader()
         formatters = self._create_formatters()

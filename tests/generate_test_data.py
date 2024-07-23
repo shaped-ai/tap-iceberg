@@ -79,7 +79,7 @@ if __name__ == "__main__":
         SortField(
             source_id=10,
             transform=IdentityTransform(),
-            direction="desc",
+            direction="asc",
             null_order="nulls-first",
         )
     )
@@ -108,9 +108,9 @@ if __name__ == "__main__":
 
     # Define the Arrow schema to ensure consistency with the Iceberg table schema.
     pyarrow_table = pa.Table.from_pylist(rows, schema=iceberg_schema.as_arrow())
-
+    # Sort the rows based on the sort order defined for the Iceberg table.
+    pyarrow_table = pyarrow_table.sort_by("updated_at")
     # Append rows to the table using PyIceberg write support
     table.overwrite(pyarrow_table)
-
     # Assert row count
     assert len(table.scan().to_arrow()) == 10_000
