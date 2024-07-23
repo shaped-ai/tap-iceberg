@@ -36,7 +36,6 @@ class IcebergTableStream(Stream):
         schema = generate_schema_from_pyarrow(iceberg_table.schema().as_arrow())
         super().__init__(tap, schema, name)
         self._iceberg_table = iceberg_table
-        self.selected_by_default = False
 
         sort_fields = self._iceberg_table.sort_order().fields
         if len(sort_fields) == 1:
