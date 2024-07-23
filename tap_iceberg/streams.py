@@ -6,7 +6,7 @@ import sys
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
-from pyiceberg.expressions import AlwaysTrue, GreaterThanOrEqual
+from pyiceberg.expressions import AlwaysTrue, GreaterThan
 from singer_sdk import Stream  # JSON Schema typing helpers
 
 from tap_iceberg.utils import generate_schema_from_pyarrow
@@ -52,10 +52,15 @@ class IcebergTableStream(Stream):
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
         """Return a generator of record-type dictionary objects."""
         filter_expression = AlwaysTrue()
-        self.logger.debug("Starting Iceberg table scan with context: %r", context)
+        self.logger.info("Starting Iceberg table scan.")
         if context and self.get_starting_replication_key_value(context):
             start_value = self.get_starting_replication_key_value(context)
-            filter_expression = GreaterThanOrEqual(self.replication_key, start_value)
+            self.logger.info(
+                "Filtering records for replication key %s greater than %s.",
+                self.replication_key,
+                start_value,
+            )
+            filter_expression = GreaterThan(self.replication_key, start_value)
         batch_reader = self._iceberg_table.scan(
             row_filter=filter_expression,
         ).to_arrow_batch_reader()
