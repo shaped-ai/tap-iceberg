@@ -52,7 +52,7 @@ class IcebergTableStream(Stream):
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
         """Return a generator of record-type dictionary objects."""
         filter_expression = AlwaysTrue()
-        self.logger.debug("Starting Iceberg table scan with context: %r", context)
+        self.logger.info("Starting Iceberg table scan with context: %r", context)
         if context and self.get_starting_replication_key_value(context):
             start_value = self.get_starting_replication_key_value(context)
             filter_expression = GreaterThanOrEqual(self.replication_key, start_value)
