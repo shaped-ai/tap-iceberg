@@ -97,6 +97,7 @@ class TapIceberg(Tap):
         catalog_properties.update(
             {
                 "type": self.config["catalog_type"],
+                "py-io-impl": "pyiceberg.io.fsspec.FsspecFileIO",
             }
         )
 
