@@ -1,6 +1,5 @@
 import os
 
-import pyarrow as pa
 from faker import Faker
 from pyiceberg.catalog import load_catalog
 from pyiceberg.schema import Schema
@@ -57,6 +56,8 @@ if not os.path.exists(ICEBERG_DIR):
     os.makedirs(ICEBERG_DIR)
 
 if __name__ == "__main__":
+    import pyarrow as pa
+
     # Create an Iceberg catalog and table
     catalog = load_catalog(
         CATALOG_NAME,

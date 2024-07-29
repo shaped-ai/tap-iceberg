@@ -1211,7 +1211,7 @@ typing-extensions = {version = ">=4.1.0", markers = "python_version < \"3.12\""}
 name = "numpy"
 version = "1.24.4"
 description = "Fundamental package for array computing in Python"
-optional = true
+optional = false
 python-versions = ">=3.8"
 files = [
     {file = "numpy-1.24.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:c0bfb52d2169d58c1cdb8cc1f16989101639b34c7d3ce60ed70b19c63eba0b64"},
@@ -1397,7 +1397,7 @@ files = [
 name = "pyarrow"
 version = "17.0.0"
 description = "Python library for Apache Arrow"
-optional = true
+optional = false
 python-versions = ">=3.8"
 files = [
     {file = "pyarrow-17.0.0-cp310-cp310-macosx_10_15_x86_64.whl", hash = "sha256:a5c8b238d47e48812ee577ee20c9a2779e6a5904f1708ae240f53ecbee7c9f07"},
@@ -2612,4 +2612,4 @@ s3 = ["fs-s3fs"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.8,<4.0"
-content-hash = "a9be6621c4c6fcdd79e50d1c3330b8dabe417560b61404da595d596adc917bea"
+content-hash = "26edb9b58bf06e2c9045acda412bde342e2f81a8f2eaeec5e5882a6be5b034c3"
