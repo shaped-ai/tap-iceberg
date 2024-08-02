@@ -26,12 +26,12 @@ python = ">=3.8,<4.0"
 importlib-resources = { version = "==6.4.*", python = "<3.9" }
 singer-sdk = { version = "~=0.38.0", extras = ["faker",] }
 fs-s3fs = { version = "~=1.1.1", optional = true }
-pyiceberg = { version = "0.7.0rc2", extras = ["s3fs", "glue", "hive", "sql-sqlite"] }
-pyarrow = { version = ">=16.0.0" }
+pyspark = { version = "3.3.2" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.4.0"
 singer-sdk = { version="~=0.38.0", extras = ["testing"] }
+pyiceberg = { version = "0.7.0", extras = ["s3fs", "glue", "hive", "sql-sqlite"] }
 
 [tool.poetry.extras]
 s3 = ["fs-s3fs"]
@@ -48,20 +48,23 @@ target-version = "py38"
 ignore = [
     "ANN101",  # missing-type-self
     "ANN102",  # missing-type-cls
+    "ANN204",  # missing-type
+    "BLE001",
+    "C901", # complex code
     "COM812",  # missing-trailing-comma
-    "ISC001",  # single-line-implicit-string-concatenation
     "D100", # missing-docstring
     "D102", # missing-module-docstring
+    "D107", # missing-function-docstring
+    "ISC001",  # single-line-implicit-string-concatenation
+    "PD901",
     "PLR0911", # missing-return-type
     "PLR0912",
     "PLR2004",
-    "C901", # complex code
     "PTH103",
     "PTH110",
-    "BLE001",
+    "RET505",
     "S101",
     "S110",
-    "RET505",
 ]
 select = ["ALL"]
 

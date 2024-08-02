@@ -2,99 +2,100 @@
 
 from __future__ import annotations
 
-import sys
-from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
-from pyiceberg.expressions import AlwaysTrue, GreaterThan
-from singer_sdk import Stream  # JSON Schema typing helpers
-
-from tap_iceberg.utils import generate_schema_from_pyarrow
+from pyspark.sql.functions import col
+from singer_sdk import Stream, Tap
 
 if TYPE_CHECKING:
-    from pyiceberg.table import Table
-
-    from tap_iceberg.tap import TapIceberg
-
-
-if sys.version_info >= (3, 9):
-    pass
-else:
-    pass
+    from pyspark.sql import SparkSession
 
 
 class IcebergTableStream(Stream):
-    """Stream class for an Iceberg table."""
+    """Stream class for an Iceberg table using PySpark."""
 
     def __init__(
         self,
-        tap: TapIceberg,
+        tap: Tap,
         name: str,
-        iceberg_table: Table,
+        spark: SparkSession,
+        full_table_name: str,
     ) -> None:
         """Initialize the stream."""
-        schema = generate_schema_from_pyarrow(iceberg_table.schema().as_arrow())
+        schema = self._infer_schema(spark, full_table_name)
         super().__init__(tap, schema, name)
-        self._iceberg_table = iceberg_table
+        self._spark = spark
+        self._full_table_name = full_table_name
 
-        sort_fields = self._iceberg_table.sort_order().fields
-        if len(sort_fields) == 1:
-            sort_field_source_id = sort_fields[0].source_id
-            sort_field_name = (
-                self._iceberg_table.schema().find_field(sort_field_source_id).name
+    def _infer_schema(
+        self, spark: SparkSession, full_table_name: str
+    ) -> dict[str, Any]:
+        """Infer the JSON schema from the Spark DataFrame schema."""
+        df = spark.table(full_table_name)
+        schema = {}
+        for field in df.schema.fields:
+            schema[field.name] = self._spark_type_to_json_schema(
+                field.dataType.simpleString()
             )
-            self._replication_key = sort_field_name
+        return {"type": "object", "properties": schema}
+
+    def _spark_type_to_json_schema(self, spark_type: str) -> dict[str, Any]:
+        """Convert Spark data type to JSON schema type."""
+        type_mapping = {
+            "string": {"type": ["string", "null"]},
+            "integer": {"type": ["integer", "null"]},
+            "long": {"type": ["integer", "null"]},
+            "double": {"type": ["number", "null"]},
+            "float": {"type": ["number", "null"]},
+            "boolean": {"type": ["boolean", "null"]},
+            "date": {"type": ["string", "null"], "format": "date"},
+            "timestamp": {"type": ["string", "null"], "format": "date-time"},
+        }
+        return type_mapping.get(spark_type, {"type": ["string", "null"]})
+
+    def get_records(
+        self, context: dict[str, Any] | None = None
+    ) -> Iterable[dict[str, Any]]:
+        """Return a generator of record-type dictionary objects."""
+        df = self._spark.table(self._full_table_name)
+
+        if self.replication_key:
+            start_value = self.get_starting_replication_key_value(context)
+            if start_value:
+                df = df.filter(col(self.replication_key) > start_value)
+
+        for row in df.toLocalIterator(prefetchPartitions=True):
+            yield row.asdict()
 
     @property
     def is_sorted(self) -> bool:
-        return not self._iceberg_table.sort_order().is_unsorted
+        """Check if the table has a sort order or partitioning."""
+        if self._is_sorted is None:
+            self._is_sorted = self._check_is_sorted()
+        return self._is_sorted
 
-    def get_records(self, context: dict | None = None) -> Iterable[dict]:
-        """Return a generator of record-type dictionary objects."""
-        filter_expression = AlwaysTrue()
-        self.logger.info("Starting Iceberg table scan.")
-        start_value = self.get_starting_replication_key_value(context)
-        if start_value:
-            self.logger.info(
-                "Filtering records for replication key %s greater than %s.",
-                self.replication_key,
-                start_value,
+    def _check_is_sorted(self) -> bool:
+        """Query Iceberg metadata to check for sort order or partitioning."""
+        try:
+            # Query Iceberg metadata for sort order.
+            sort_order = (
+                self._spark.sql(f"DESCRIBE DETAIL {self._full_table_name}")
+                .select("sort_order")
+                .collect()[0][0]
             )
-            # Convert to timezone-less isoformat string.
-            if isinstance(start_value, str):
-                start_value = (
-                    datetime.fromisoformat(start_value).replace(tzinfo=None).isoformat()
-                )
-            filter_expression = GreaterThan(self.replication_key, start_value)
-        batch_reader = self._iceberg_table.scan(
-            row_filter=filter_expression,
-        ).to_arrow_batch_reader()
-        formatters = self._create_formatters()
-        for batch in batch_reader:
-            records = batch.to_pylist()
-            for record in records:
-                yield self._format_record(record, formatters)
+            if sort_order and sort_order != "[]":
+                return True
 
-    def _create_formatters(self) -> dict[str, Callable[[Any], Any]]:
-        formatters = {}
-        for field, schema in self.schema["properties"].items():
-            if schema.get("format") == "date" and schema["type"] == ["string", "null"]:
-                formatters[field] = lambda x: self._format_date(x)
-            elif "null" in schema["type"]:
-                formatters[field] = lambda x: x if x is not None else None
+            # Query Iceberg metadata for partitioning.
+            partition_fields = (
+                self._spark.sql(f"DESCRIBE DETAIL {self._full_table_name}")
+                .select("partition_field_names")
+                .collect()[0][0]
+            )
+            if partition_fields and partition_fields != "[]":
+                return True
             else:
-                formatters[field] = lambda x: x
-        return formatters
-
-    def _format_date(self, value: str | date | datetime | None) -> str | None:
-        if isinstance(value, (date, datetime)):
-            return value.isoformat()[:10]
-        elif isinstance(value, str):
-            return value[:10]
-        else:
-            return None
-
-    def _format_record(
-        self, record: dict[str, Any], formatters: dict[str, Callable[[Any], Any]]
-    ) -> dict[str, Any]:
-        return {field: formatters[field](value) for field, value in record.items()}
+                return False
+        except Exception as e:
+            self.logger.warning("Error checking sort order or partitioning: %s", e)
+            return False
