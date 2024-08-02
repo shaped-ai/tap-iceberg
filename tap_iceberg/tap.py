@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -190,12 +189,6 @@ class TapIceberg(Tap):
             )
 
         return discovered_streams
-
-    def stop(self) -> None:
-        """Stop the Spark session."""
-        if self._spark:
-            with suppress(Exception):
-                self._spark.stop()
 
 
 if __name__ == "__main__":
