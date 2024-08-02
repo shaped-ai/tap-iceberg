@@ -10,7 +10,7 @@ SAMPLE_CONFIG = {
     "catalog_type": "jdbc",
     "catalog_name": CATALOG_NAME,
     "catalog_warehouse_path": ICEBERG_WAREHOUSE,
-    "catalog_uri": f"jdbc:{ICEBERG_DB_URI}",
+    "catalog_uri": ICEBERG_DB_URI,
 }
 
 

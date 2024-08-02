@@ -14,12 +14,10 @@ if TYPE_CHECKING:
 class TapIceberg(Tap):
     """Iceberg tap class using PySpark."""
 
-    def __init__(self, config: dict[str, str], *args, **kwargs) -> None:
-        self._spark = self._create_spark_session(config=config)
-        super().__init__(config=config, *args, **kwargs)
-
     name = "tap-iceberg"
     iceberg_version = "1.6.0"
+    # Class-level variable to store the singleton SparkSession
+    _spark = None  
 
     config_jsonschema = th.PropertiesList(
         th.Property(
@@ -74,6 +72,11 @@ class TapIceberg(Tap):
             description="The URI of the Iceberg catalog",
         ),
     ).to_dict()
+
+    def __init__(self, config: dict[str, str], *args, **kwargs) -> None:
+        self._spark = self._create_spark_session(config=config)
+        print("Current working directory: ", Path.cwd())
+        super().__init__(config=config, *args, **kwargs)
 
     def _create_spark_session(self, config: dict[str, str]) -> SparkSession:
         """Create and return a SparkSession configured for Iceberg."""

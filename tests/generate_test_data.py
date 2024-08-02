@@ -31,34 +31,6 @@ PARTITIONED_TABLE_IDENTIFIER = f"{NAMESPACE}.{PARTITIONED_TABLE_NAME}"
 ICEBERG_DB_URI = f"jdbc:sqlite:{ICEBERG_DIR}/{CATALOG_NAME}.db"
 ICEBERG_WAREHOUSE = f"{ICEBERG_DIR}/{CATALOG_NAME}.warehouse"
 
-# Create directory if it doesn't exist
-if not os.path.exists(ICEBERG_DIR):
-    os.makedirs(ICEBERG_DIR)
-
-# Initialize Spark session
-iceberg_jars = TapIceberg.find_iceberg_jars()
-spark = (
-    SparkSession.builder.appName("IcebergTest")
-    .master("local[*]")
-    .config("spark.jars", ",".join(iceberg_jars))
-    .config(
-        "spark.sql.extensions",
-        "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-    )
-    .config(
-        "spark.sql.catalog.spark_catalog",
-        "org.apache.iceberg.spark.SparkSessionCatalog",
-    )
-    .config("spark.sql.catalog.spark_catalog.type", "hive")
-    .config(
-        f"spark.sql.catalog.{CATALOG_NAME}", "org.apache.iceberg.spark.SparkCatalog"
-    )
-    .config(f"spark.sql.catalog.{CATALOG_NAME}.type", "jdbc")
-    .config(f"spark.sql.catalog.{CATALOG_NAME}.uri", ICEBERG_DB_URI)
-    .config(f"spark.sql.catalog.{CATALOG_NAME}.warehouse", ICEBERG_WAREHOUSE)
-    .getOrCreate()
-)
-
 schema = StructType(
     [
         StructField("id", LongType(), False),
@@ -96,69 +68,96 @@ def generate_data():
             ),  # Now returns a datetime object
         )
 
+if __name__ == "__main__":
+    # Create directory if it doesn't exist
+    if not os.path.exists(ICEBERG_DIR):
+        os.makedirs(ICEBERG_DIR)
 
-# Create DataFrame
-df = spark.createDataFrame(generate_data(), schema=schema)
+    # Initialize Spark session
+    iceberg_jars = TapIceberg.find_iceberg_jars()
+    spark = (
+        SparkSession.builder.appName("IcebergTest")
+        .master("local[*]")
+        .config("spark.jars", ",".join(iceberg_jars))
+        .config(
+            "spark.sql.extensions",
+            "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+        )
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.iceberg.spark.SparkSessionCatalog",
+        )
+        .config("spark.sql.catalog.spark_catalog.type", "hive")
+        .config(
+            f"spark.sql.catalog.{CATALOG_NAME}", "org.apache.iceberg.spark.SparkCatalog"
+        )
+        .config(f"spark.sql.catalog.{CATALOG_NAME}.type", "jdbc")
+        .config(f"spark.sql.catalog.{CATALOG_NAME}.uri", ICEBERG_DB_URI)
+        .config(f"spark.sql.catalog.{CATALOG_NAME}.warehouse", ICEBERG_WAREHOUSE)
+        .getOrCreate()
+    )
+    # Create DataFrame
+    df = spark.createDataFrame(generate_data(), schema=schema)
 
-# Create namespace if it doesn't exist
-spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG_NAME}.{NAMESPACE}")
+    # Create namespace if it doesn't exist
+    spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {CATALOG_NAME}.{NAMESPACE}")
 
-# Drop tables if they exist
-spark.sql(f"DROP TABLE IF EXISTS {CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER}")
-spark.sql(f"DROP TABLE IF EXISTS {CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER}")
+    # Drop tables if they exist
+    spark.sql(f"DROP TABLE IF EXISTS {CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER}")
+    spark.sql(f"DROP TABLE IF EXISTS {CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER}")
 
-# Create sorted table
-spark.sql(f"""
-CREATE TABLE {CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER} (
-    id BIGINT,
-    name STRING,
-    age INT,
-    salary DOUBLE,
-    is_active BOOLEAN,
-    join_date DATE,
-    last_login TIMESTAMP,
-    address STRING,
-    phone_numbers ARRAY<STRING>,
-    updated_at TIMESTAMP
-) USING iceberg
-TBLPROPERTIES (
-    'write.format.default' = 'parquet',
-    'sort-order' = 'updated_at'
-)
-""")
+    # Create sorted table
+    spark.sql(f"""
+    CREATE TABLE {CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER} (
+        id BIGINT,
+        name STRING,
+        age INT,
+        salary DOUBLE,
+        is_active BOOLEAN,
+        join_date DATE,
+        last_login TIMESTAMP,
+        address STRING,
+        phone_numbers ARRAY<STRING>,
+        updated_at TIMESTAMP
+    ) USING iceberg
+    TBLPROPERTIES (
+        'write.format.default' = 'parquet',
+        'sort-order' = 'updated_at'
+    )
+    """)
 
-# Create partitioned table
-spark.sql(f"""
-CREATE TABLE {CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER} (
-    id BIGINT,
-    name STRING,
-    age INT,
-    salary DOUBLE,
-    is_active BOOLEAN,
-    join_date DATE,
-    last_login TIMESTAMP,
-    address STRING,
-    phone_numbers ARRAY<STRING>,
-    updated_at TIMESTAMP
-) USING iceberg
-PARTITIONED BY (hours(updated_at))
-""")
+    # Create partitioned table
+    spark.sql(f"""
+    CREATE TABLE {CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER} (
+        id BIGINT,
+        name STRING,
+        age INT,
+        salary DOUBLE,
+        is_active BOOLEAN,
+        join_date DATE,
+        last_login TIMESTAMP,
+        address STRING,
+        phone_numbers ARRAY<STRING>,
+        updated_at TIMESTAMP
+    ) USING iceberg
+    PARTITIONED BY (hours(updated_at))
+    """)
 
-# Write data to tables
-df.sort("updated_at").writeTo(f"{CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER}").append()
-df.writeTo(f"{CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER}").append()
+    # Write data to tables
+    df.sort("updated_at").writeTo(f"{CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER}").append()
+    df.writeTo(f"{CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER}").append()
 
-# Verify row counts
-sorted_count = spark.table(f"{CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER}").count()
-partitioned_count = spark.table(
-    f"{CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER}"
-).count()
+    # Verify row counts
+    sorted_count = spark.table(f"{CATALOG_NAME}.{SORTED_TABLE_IDENTIFIER}").count()
+    partitioned_count = spark.table(
+        f"{CATALOG_NAME}.{PARTITIONED_TABLE_IDENTIFIER}"
+    ).count()
 
-print(f"Sorted table row count: {sorted_count}")
-print(f"Partitioned table row count: {partitioned_count}")
+    print(f"Sorted table row count: {sorted_count}")
+    print(f"Partitioned table row count: {partitioned_count}")
 
-assert sorted_count == 10_000
-assert partitioned_count == 10_000
+    assert sorted_count == 10_000
+    assert partitioned_count == 10_000
 
-# Stop Spark session
-spark.stop()
+    # Stop Spark session
+    spark.stop()
