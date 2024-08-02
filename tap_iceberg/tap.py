@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pyspark.sql import SparkSession
 from singer_sdk import Tap
@@ -17,7 +17,7 @@ class TapIceberg(Tap):
     name = "tap-iceberg"
     iceberg_version = "1.6.0"
     # Class-level variable to store the singleton SparkSession
-    _spark = None  
+    _spark = None
 
     config_jsonschema = th.PropertiesList(
         th.Property(
@@ -73,10 +73,13 @@ class TapIceberg(Tap):
         ),
     ).to_dict()
 
-    def __init__(self, config: dict[str, str], *args, **kwargs) -> None:
-        self._spark = self._create_spark_session(config=config)
-        print("Current working directory: ", Path.cwd())
-        super().__init__(config=config, *args, **kwargs)
+    def __init__(
+        self, config: dict[str, str], *args: Any, **kwargs: dict[str, Any]
+    ) -> None:
+        if not self._spark:
+            self._spark = self._create_spark_session(config=config)
+        super().__init__(*args, **kwargs)
+        self.config = config
 
     def _create_spark_session(self, config: dict[str, str]) -> SparkSession:
         """Create and return a SparkSession configured for Iceberg."""
@@ -140,7 +143,8 @@ class TapIceberg(Tap):
         jar_dir = iceberg_path / "jars"
         jar_files = list(jar_dir.glob("*.jar"))
         if not jar_files:
-            raise RuntimeError("No Iceberg JARs found in the Python environment")
+            error_msg = "No Iceberg JARs found in the Python environment"
+            raise RuntimeError(error_msg)
         return [str(jar) for jar in jar_files]
 
     def discover_streams(self) -> list[IcebergTableStream]:
@@ -148,14 +152,17 @@ class TapIceberg(Tap):
         # Local import to avoid circular dependency.
         from tap_iceberg.streams import IcebergTableStream
 
+        assert self._spark, "Spark session not initialized"
         catalog_name = self.config["catalog_name"]
         discovered_streams = []
 
         catalogs = self._spark.sql("SHOW CATALOGS").collect()
         if catalog_name not in [cat["catalog"] for cat in catalogs]:
-            raise ValueError(
-                f"Catalog '{catalog_name}' does not exist. Available catalogs: {[cat['catalog'] for cat in catalogs]}"
+            error_msg = (
+                f"Catalog '{catalog_name}' does not exist. "
+                f"Available catalogs: {[cat['catalog'] for cat in catalogs]}"
             )
+            raise ValueError(error_msg)
 
         namespaces = self._spark.sql(f"SHOW NAMESPACES IN {catalog_name}").collect()
         tables = []
@@ -166,10 +173,8 @@ class TapIceberg(Tap):
                         f"SHOW TABLES IN {namespace['namespace']}"
                     ).collect()
                 )
-        except Exception as e:
-            self.logger.exception(
-                f"Error listing tables in catalog '{catalog_name}': {e}"
-            )
+        except Exception:
+            self.logger.exception("Error listing tables in catalog '%s'", catalog_name)
 
         for table in tables:
             namespace = table["namespace"]

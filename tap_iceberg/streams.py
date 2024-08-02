@@ -1,3 +1,4 @@
+# !/usr/bin/env python
 """Stream type classes for tap-iceberg."""
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ class IcebergTableStream(Stream):
         super().__init__(tap, schema, name)
         self._spark = spark
         self._full_table_name = full_table_name
+        self._is_sorted: bool | None = None
 
     def _infer_schema(
         self, spark: SparkSession, full_table_name: str
@@ -51,7 +53,7 @@ class IcebergTableStream(Stream):
             "date": {"type": ["string", "null"], "format": "date"},
             "timestamp": {"type": ["string", "null"], "format": "date-time"},
         }
-        return type_mapping.get(spark_type, {"type": ["string", "null"]})
+        return type_mapping.get(spark_type, {"type": ["string", "null"]})  # type: ignore[return-value]
 
     def get_records(
         self, context: dict[str, Any] | None = None
@@ -65,7 +67,7 @@ class IcebergTableStream(Stream):
                 df = df.filter(col(self.replication_key) > start_value)
 
         for row in df.toLocalIterator(prefetchPartitions=True):
-            yield row.asdict()
+            yield row.asDict()
 
     @property
     def is_sorted(self) -> bool:
@@ -77,25 +79,13 @@ class IcebergTableStream(Stream):
     def _check_is_sorted(self) -> bool:
         """Query Iceberg metadata to check for sort order or partitioning."""
         try:
-            # Query Iceberg metadata for sort order.
-            sort_order = (
-                self._spark.sql(f"DESCRIBE DETAIL {self._full_table_name}")
-                .select("sort_order")
-                .collect()[0][0]
-            )
-            if sort_order and sort_order != "[]":
-                return True
-
-            # Query Iceberg metadata for partitioning.
-            partition_fields = (
-                self._spark.sql(f"DESCRIBE DETAIL {self._full_table_name}")
-                .select("partition_field_names")
-                .collect()[0][0]
-            )
-            if partition_fields and partition_fields != "[]":
-                return True
-            else:
-                return False
+            detail = self._spark.sql(f"DESCRIBE DETAIL {self._full_table_name}")
         except Exception as e:
             self.logger.warning("Error checking sort order or partitioning: %s", e)
             return False
+
+        sort_order = detail.select("sort_order").collect()[0][0]
+        partition_fields = detail.select("partition_field_names").collect()[0][0]
+        return (sort_order and sort_order != "[]") or (
+            partition_fields and partition_fields != "[]"
+        )
