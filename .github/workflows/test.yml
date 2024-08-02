@@ -1,5 +1,4 @@
 ### A CI workflow template that runs linting and python testing
-### TODO: Modify as needed or as desired.
 
 name: Test tap-iceberg
 
@@ -16,6 +15,12 @@ jobs:
         python-version: ["3.8", "3.9", "3.10", "3.11"]
     steps:
     - uses: actions/checkout@v4
+    - name: Install OpenJDK 17
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openjdk-17-jdk
+    - name: Set JAVA_HOME
+      run: echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
       with:
