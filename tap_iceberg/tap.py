@@ -73,13 +73,11 @@ class TapIceberg(Tap):
         ),
     ).to_dict()
 
-    def __init__(
-        self, config: dict[str, str], *args: Any, **kwargs: dict[str, Any]
-    ) -> None:
+    def __init__(self, config: dict[str, str], *args: Any, **kwargs: Any) -> None:
         if not self._spark:
             self._spark = self._create_spark_session(config=config)
+        kwargs["config"] = config
         super().__init__(*args, **kwargs)
-        self.config = config
 
     def _create_spark_session(self, config: dict[str, str]) -> SparkSession:
         """Create and return a SparkSession configured for Iceberg."""
