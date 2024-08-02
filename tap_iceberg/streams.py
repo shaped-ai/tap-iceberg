@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Iterable
 
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, date_format
 from singer_sdk import Stream, Tap
 
 if TYPE_CHECKING:
@@ -45,13 +45,15 @@ class IcebergTableStream(Stream):
         """Convert Spark data type to JSON schema type."""
         type_mapping = {
             "string": {"type": ["string", "null"]},
-            "integer": {"type": ["integer", "null"]},
+            "int": {"type": ["integer", "null"]},
             "long": {"type": ["integer", "null"]},
+            "bigint": {"type": ["integer", "null"]},
             "double": {"type": ["number", "null"]},
             "float": {"type": ["number", "null"]},
             "boolean": {"type": ["boolean", "null"]},
             "date": {"type": ["string", "null"], "format": "date"},
             "timestamp": {"type": ["string", "null"], "format": "date-time"},
+            "array<string>": {"type": ["array", "null"], "items": {"type": "string"}},
         }
         return type_mapping.get(spark_type, {"type": ["string", "null"]})  # type: ignore[return-value]
 
@@ -66,6 +68,16 @@ class IcebergTableStream(Stream):
             if start_value:
                 df = df.filter(col(self.replication_key) > start_value)
 
+        schema = self.schema["properties"]
+        select_exprs = [
+            date_format(col(key), "yyyy-MM-dd").alias(key)
+            if schema[key].get("format") == "date"
+            else col(key)
+            for key in schema
+        ]
+        df = df.select(*select_exprs)
+
+        # Use Spark's built-in methods to iterate efficiently over large datasets
         for row in df.toLocalIterator(prefetchPartitions=True):
             yield row.asDict()
 
