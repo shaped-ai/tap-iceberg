@@ -1,0 +1,96 @@
+{
+  "format-version" : 2,
+  "table-uuid" : "1d464e25-26f3-4ea5-b295-10049e4ca58e",
+  "location" : "test_iceberg_data/test_catalog.warehouse/test_namespace/test_partitioned_table",
+  "last-sequence-number" : 0,
+  "last-updated-ms" : 1722613354607,
+  "last-column-id" : 11,
+  "current-schema-id" : 0,
+  "schemas" : [ {
+    "type" : "struct",
+    "schema-id" : 0,
+    "fields" : [ {
+      "id" : 1,
+      "name" : "id",
+      "required" : false,
+      "type" : "long"
+    }, {
+      "id" : 2,
+      "name" : "name",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 3,
+      "name" : "age",
+      "required" : false,
+      "type" : "int"
+    }, {
+      "id" : 4,
+      "name" : "salary",
+      "required" : false,
+      "type" : "double"
+    }, {
+      "id" : 5,
+      "name" : "is_active",
+      "required" : false,
+      "type" : "boolean"
+    }, {
+      "id" : 6,
+      "name" : "join_date",
+      "required" : false,
+      "type" : "date"
+    }, {
+      "id" : 7,
+      "name" : "last_login",
+      "required" : false,
+      "type" : "timestamptz"
+    }, {
+      "id" : 8,
+      "name" : "address",
+      "required" : false,
+      "type" : "string"
+    }, {
+      "id" : 9,
+      "name" : "phone_numbers",
+      "required" : false,
+      "type" : {
+        "type" : "list",
+        "element-id" : 11,
+        "element" : "string",
+        "element-required" : false
+      }
+    }, {
+      "id" : 10,
+      "name" : "updated_at",
+      "required" : false,
+      "type" : "timestamptz"
+    } ]
+  } ],
+  "default-spec-id" : 0,
+  "partition-specs" : [ {
+    "spec-id" : 0,
+    "fields" : [ {
+      "name" : "updated_at_hour",
+      "transform" : "hour",
+      "source-id" : 10,
+      "field-id" : 1000
+    } ]
+  } ],
+  "last-partition-id" : 1000,
+  "default-sort-order-id" : 0,
+  "sort-orders" : [ {
+    "order-id" : 0,
+    "fields" : [ ]
+  } ],
+  "properties" : {
+    "owner" : "benjamintheunissen",
+    "write.parquet.compression-codec" : "zstd"
+  },
+  "current-snapshot-id" : -1,
+  "refs" : { },
+  "snapshots" : [ ],
+  "statistics" : [ ],
+  "partition-statistics" : [ ],
+  "snapshot-log" : [ ],
+  "metadata-log" : [ ]
+}
