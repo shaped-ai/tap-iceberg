@@ -7,6 +7,7 @@ from botocore.credentials import (
     Credentials,
     DeferredRefreshableCredentials,
 )
+from botocore.session import Session as BotoSession
 from pyarrow import DataType
 from singer_sdk import typing as th
 
@@ -14,7 +15,7 @@ from singer_sdk import typing as th
 def get_refreshable_botocore_session(
     source_credentials: Credentials | None,
     assume_role_arn: str,
-) -> DeferredRefreshableCredentials:
+) -> BotoSession:
     """Get a refreshable botocore session for assuming a role."""
     if source_credentials is not None:
         boto3_session = Session(
@@ -30,10 +31,13 @@ def get_refreshable_botocore_session(
         source_credentials=source_credentials,
         role_arn=assume_role_arn,
     )
-    return DeferredRefreshableCredentials(
+    refreshable_credentials = DeferredRefreshableCredentials(
         method="assume-role",
         refresh_using=fetcher.fetch_credentials,
     )
+    botocore_session = BotoSession()
+    botocore_session._credentials = refreshable_credentials  # noqa: SLF001
+    return botocore_session
 
 
 def pyarrow_to_jsonschema_type(arrow_type: DataType) -> th.JSONTypeHelper:
