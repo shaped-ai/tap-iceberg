@@ -1,6 +1,39 @@
+from __future__ import annotations
+
 import pyarrow as pa
+from boto3 import Session
+from botocore.credentials import (
+    AssumeRoleCredentialFetcher,
+    Credentials,
+    DeferredRefreshableCredentials,
+)
 from pyarrow import DataType
 from singer_sdk import typing as th
+
+
+def get_refreshable_botocore_session(
+    source_credentials: Credentials | None,
+    assume_role_arn: str,
+) -> DeferredRefreshableCredentials:
+    """Get a refreshable botocore session for assuming a role."""
+    if source_credentials is not None:
+        boto3_session = Session(
+            aws_access_key_id=source_credentials.access_key,
+            aws_secret_access_key=source_credentials.secret_key,
+            aws_session_token=source_credentials.token,
+        )
+    else:
+        boto3_session = Session()
+
+    fetcher = AssumeRoleCredentialFetcher(
+        client_creator=boto3_session.client,
+        source_credentials=source_credentials,
+        role_arn=assume_role_arn,
+    )
+    return DeferredRefreshableCredentials(
+        method="assume-role",
+        refresh_using=fetcher.fetch_credentials,
+    )
 
 
 def pyarrow_to_jsonschema_type(arrow_type: DataType) -> th.JSONTypeHelper:

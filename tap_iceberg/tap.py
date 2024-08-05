@@ -5,9 +5,14 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from botocore.credentials import Credentials
 from pyiceberg.catalog import load_catalog
 from singer_sdk import Tap
-from singer_sdk import typing as th  # JSON schema typing helpers
+from singer_sdk import typing as th
+
+from tap_iceberg.utils import (
+    get_refreshable_botocore_session,
+)
 
 if TYPE_CHECKING:
     from pyiceberg.catalog import Catalog
@@ -61,6 +66,12 @@ class TapIceberg(Tap):
             description="The AWS region for accessing S3/Glue catalogs",
         ),
         th.Property(
+            "client_iam_role_arn",
+            th.StringType,
+            required=False,
+            description="The ARN of the IAM role to use for accessing S3/Glue catalog",
+        ),
+        th.Property(
             "catalog_properties",
             th.ObjectType(additional_properties=th.StringType()),
             required=False,
@@ -102,26 +113,40 @@ class TapIceberg(Tap):
 
         # Export AWS credentials to the catalog properties, and standard AWS
         # environment variables to override any system credentials.
-        if self.config.get("client_access_key_id"):
-            catalog_properties["client.access-key-id"] = self.config[
-                "client_access_key_id"
-            ]
-            os.environ["AWS_ACCESS_KEY_ID"] = self.config["client_access_key_id"]
-        if self.config.get("client_secret_access_key"):
-            catalog_properties["client.secret-access-key"] = self.config[
-                "client_secret_access_key"
-            ]
-            os.environ["AWS_SECRET_ACCESS_KEY"] = self.config[
-                "client_secret_access_key"
-            ]
-        if self.config.get("client_session_token"):
-            catalog_properties["client.session-token"] = self.config[
-                "client_session_token"
-            ]
-            os.environ["AWS_SESSION_TOKEN"] = self.config["client_session_token"]
-        if self.config.get("client_region"):
-            catalog_properties["client.region"] = self.config["client_region"]
-            os.environ["AWS_DEFAULT_REGION"] = self.config["client_region"]
+        client_access_key_id = self.config.get("client_access_key_id")
+        client_secret_access_key = self.config.get("client_secret_access_key")
+        client_session_token = self.config.get("client_session_token")
+        client_region = self.config.get("client_region")
+
+        # If client IAM role ARN is provided, use provided credentials to assume
+        # the role and create a botocore session with the assumed role, using those
+        # refreshable credentials to
+        if self.config.get("client_iam_role_arn"):
+            credentials = Credentials(
+                access_key=client_access_key_id,
+                secret_key=client_secret_access_key,
+                token=client_session_token,
+            )
+            botocore_session = get_refreshable_botocore_session(
+                source_credentials=credentials,
+                assume_role_arn=self.config["client_iam_role_arn"],
+            )
+            catalog_properties["botocore_session"] = botocore_session
+        else:
+            if client_access_key_id:
+                catalog_properties["client.access-key-id"] = client_access_key_id
+                os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
+            if client_secret_access_key:
+                catalog_properties["client.secret-access-key"] = (
+                    client_secret_access_key
+                )
+                os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
+            if client_session_token:
+                catalog_properties["client.session-token"] = client_session_token
+                os.environ["AWS_SESSION_TOKEN"] = client_session_token
+        if client_region:
+            catalog_properties["client.region"] = client_region
+            os.environ["AWS_DEFAULT_REGION"] = client_region
 
         self.logger.debug(
             "Loading Iceberg catalog with properties: %s",
