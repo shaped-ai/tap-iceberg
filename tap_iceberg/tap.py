@@ -134,8 +134,8 @@ class TapIceberg(Tap):
                 role_session_name=role_session_name,
             )
             catalog_properties["botocore_session"] = botocore_session
-            catalog_properties["client.role_arn"] = self.config["client_iam_role_arn"]
-            catalog_properties["client.session_name"] = role_session_name
+            catalog_properties["client.role-arn"] = self.config["client_iam_role_arn"]
+            catalog_properties["client.session-name"] = role_session_name
         else:
             if client_access_key_id:
                 catalog_properties["client.access-key-id"] = client_access_key_id
