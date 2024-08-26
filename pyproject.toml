@@ -22,11 +22,11 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.8,<4.0"
+python = ">=3.8,<3.12,!=3.9.7"
 importlib-resources = { version = "==6.4.*", python = "<3.9" }
 singer-sdk = { version = "~=0.38.0", extras = ["faker",] }
 fs-s3fs = { version = "~=1.1.1", optional = true }
-pyiceberg = { version = "0.7.0", extras = ["s3fs", "glue", "hive", "sql-sqlite"] }
+pyiceberg = { git = "https://github.com/shaped-ai/iceberg-python", branch = "main", extras = ["s3fs", "glue", "hive", "sql-sqlite"] }
 pyarrow = { version = ">=16.0.0" }
 
 [tool.poetry.group.dev.dependencies]
