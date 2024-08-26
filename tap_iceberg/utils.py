@@ -15,6 +15,7 @@ from singer_sdk import typing as th
 def get_refreshable_botocore_session(
     source_credentials: Credentials | None,
     assume_role_arn: str,
+    role_session_name: str | None = None,
 ) -> BotoSession:
     """Get a refreshable botocore session for assuming a role."""
     if source_credentials is not None:
@@ -26,10 +27,14 @@ def get_refreshable_botocore_session(
     else:
         boto3_session = Session()
 
+    extra_args = {}
+    if role_session_name:
+        extra_args["RoleSessionName"] = role_session_name
     fetcher = AssumeRoleCredentialFetcher(
         client_creator=boto3_session.client,
         source_credentials=source_credentials,
         role_arn=assume_role_arn,
+        extra_args={},
     )
     refreshable_credentials = DeferredRefreshableCredentials(
         method="assume-role",

@@ -122,6 +122,7 @@ class TapIceberg(Tap):
         # the role and create a botocore session with the assumed role, using those
         # refreshable credentials to
         if self.config.get("client_iam_role_arn"):
+            role_session_name = "TapIceberg"
             credentials = Credentials(
                 access_key=client_access_key_id,
                 secret_key=client_secret_access_key,
@@ -130,8 +131,11 @@ class TapIceberg(Tap):
             botocore_session = get_refreshable_botocore_session(
                 source_credentials=credentials,
                 assume_role_arn=self.config["client_iam_role_arn"],
+                role_session_name=role_session_name,
             )
             catalog_properties["botocore_session"] = botocore_session
+            catalog_properties["client.role_arn"] = self.config["client_iam_role_arn"]
+            catalog_properties["client.session_name"] = role_session_name
         else:
             if client_access_key_id:
                 catalog_properties["client.access-key-id"] = client_access_key_id

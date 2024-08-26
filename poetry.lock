@@ -1682,7 +1682,7 @@ zstandard = ["zstandard (>=0.13.0,<1.0.0)"]
 type = "git"
 url = "https://github.com/shaped-ai/iceberg-python"
 reference = "main"
-resolved_reference = "46606bf04f198adec3aa5bacc1115b0bf43e5f35"
+resolved_reference = "46a7db66125c221d95d69bde234d231042231502"
 
 [[package]]
 name = "pyjwt"
