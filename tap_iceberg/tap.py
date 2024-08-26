@@ -118,9 +118,19 @@ class TapIceberg(Tap):
         client_session_token = self.config.get("client_session_token")
         client_region = self.config.get("client_region")
 
+        if client_access_key_id:
+            os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
+        if client_secret_access_key:
+            os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
+        if client_session_token:
+            os.environ["AWS_SESSION_TOKEN"] = client_session_token
+        if client_region:
+            catalog_properties["client.region"] = client_region
+            os.environ["AWS_DEFAULT_REGION"] = client_region
+
         # If client IAM role ARN is provided, use provided credentials to assume
         # the role and create a botocore session with the assumed role, using those
-        # refreshable credentials to
+        # refreshable credentials.
         if self.config.get("client_iam_role_arn"):
             role_session_name = "TapIceberg"
             credentials = Credentials(
@@ -136,21 +146,21 @@ class TapIceberg(Tap):
             catalog_properties["botocore_session"] = botocore_session
             catalog_properties["client.role-arn"] = self.config["client_iam_role_arn"]
             catalog_properties["client.session-name"] = role_session_name
+            if client_access_key_id:
+                os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
+            if client_secret_access_key:
+                os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
+            if client_session_token:
+                os.environ["AWS_SESSION_TOKEN"] = client_session_token
         else:
             if client_access_key_id:
                 catalog_properties["client.access-key-id"] = client_access_key_id
-                os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
             if client_secret_access_key:
                 catalog_properties["client.secret-access-key"] = (
                     client_secret_access_key
                 )
-                os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
             if client_session_token:
                 catalog_properties["client.session-token"] = client_session_token
-                os.environ["AWS_SESSION_TOKEN"] = client_session_token
-        if client_region:
-            catalog_properties["client.region"] = client_region
-            os.environ["AWS_DEFAULT_REGION"] = client_region
 
         self.logger.debug(
             "Loading Iceberg catalog with properties: %s",
