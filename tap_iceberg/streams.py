@@ -6,6 +6,7 @@ import sys
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
+import pyarrow as pa
 from pyiceberg.expressions import AlwaysTrue, GreaterThan
 from singer_sdk import Stream  # JSON Schema typing helpers
 
@@ -69,11 +70,41 @@ class IcebergTableStream(Stream):
         batch_reader = self._iceberg_table.scan(
             row_filter=filter_expression,
         ).to_arrow_batch_reader()
+
+        # Sort by batch if replication key is set and table is not sorted.
+        if self.replication_key and not self.is_sorted:
+            batch_reader = self._create_sorted_batch_reader(
+                batch_reader, self._replication_key
+            )
+
         formatters = self._create_formatters()
         for batch in batch_reader:
             records = batch.to_pylist()
             for record in records:
                 yield self._format_record(record, formatters)
+
+    def _create_sorted_batch_reader(
+        self, reader: pa.RecordBatchReader, sort_key: str
+    ) -> pa.RecordBatchReader:
+        """Create a new RecordBatchReader that yields sorted batches.
+
+        Sorted order is best-effort and may not be stable across batches.
+
+        Args:
+            reader (pa.RecordBatchReader): The original RecordBatchReader.
+            sort_key (str): The name of the column to sort by.
+
+        Returns:
+            pa.RecordBatchReader: A new RecordBatchReader that yields sorted batches.
+        """
+
+        def sorted_batch_generator() -> Iterable[pa.RecordBatch]:
+            for batch in reader:
+                yield batch.sort_by(sort_key)
+
+        return pa.RecordBatchReader.from_batches(
+            reader.schema, sorted_batch_generator()
+        )
 
     def _create_formatters(self) -> dict[str, Callable[[Any], Any]]:
         formatters = {}
