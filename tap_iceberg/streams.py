@@ -48,7 +48,7 @@ class IcebergTableStream(Stream):
 
     @property
     def is_sorted(self) -> bool:
-        return not self._iceberg_table.sort_order().is_unsorted
+        return not self._iceberg_table.sort_order().is_unsorted or self._replication_key
 
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
         """Return a generator of record-type dictionary objects."""
