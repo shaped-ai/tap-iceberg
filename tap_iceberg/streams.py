@@ -60,11 +60,6 @@ class IcebergTableStream(Stream):
                 self.replication_key,
                 start_value,
             )
-            # Convert to timezone-less isoformat string.
-            if isinstance(start_value, str):
-                start_value = (
-                    datetime.fromisoformat(start_value).replace(tzinfo=None).isoformat()
-                )
             filter_expression = GreaterThan(self.replication_key, start_value)
         batch_reader = self._iceberg_table.scan(
             row_filter=filter_expression,
