@@ -55,9 +55,6 @@ class IcebergTableStream(Stream):
         self.logger.info("Starting Iceberg table scan.")
         start_value = self.get_starting_replication_key_value(context)
         if start_value:
-            if isinstance(start_value, str):
-                # Remove timezone offset if present.
-                start_value = start_value.split("+")[0]
             self.logger.info(
                 "Filtering records for replication key %s greater than %s.",
                 self.replication_key,
