@@ -1,10 +1,10 @@
 version: 1
 send_anonymous_usage_stats: true
-project_id: "tap-iceberg"
+project_id: tap-iceberg
 plugins:
   extractors:
-  - name: "tap-iceberg"
-    namespace: "tap_iceberg"
+  - name: tap-iceberg
+    namespace: tap_iceberg
     pip_url: -e .
     capabilities:
     - state
@@ -19,9 +19,6 @@ plugins:
     - description: The type of catalog to connect to.
       label: Catalog Type
       name: catalog_type
-    - description: The URI of the catalog to connect to.
-      label: Catalog URI
-      name: catalog_uri
     - description: Additional properties to pass to the catalog connection.
       label: Catalog Properties
       name: catalog_properties

@@ -105,11 +105,7 @@ class TapIceberg(Tap):
     def _get_catalog(self) -> Catalog:
         """Load and return the Iceberg catalog based on the configuration."""
         catalog_properties = self.config.get("catalog_properties", {})
-        catalog_properties.update(
-            {
-                "type": self.config["catalog_type"],
-            }
-        )
+        catalog_properties["type"] = self.config["catalog_type"]
 
         # Export AWS credentials to the catalog properties, and standard AWS
         # environment variables to override any system credentials.
@@ -159,7 +155,7 @@ class TapIceberg(Tap):
         )
 
         return load_catalog(
-            self.config.get("catalog_name"),
+            self.config["catalog_name"],
             **{
                 key: value
                 for key, value in catalog_properties.items()
