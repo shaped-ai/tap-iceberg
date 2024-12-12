@@ -7,6 +7,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 from pyiceberg.expressions import AlwaysTrue, GreaterThan
+from pyiceberg.types import TimestampType
 from singer_sdk import Stream  # JSON Schema typing helpers
 
 from tap_iceberg.utils import generate_schema_from_pyarrow
@@ -55,12 +56,18 @@ class IcebergTableStream(Stream):
         self.logger.info("Starting Iceberg table scan.")
         start_value = self.get_starting_replication_key_value(context)
         if start_value:
+            replication_key_field = self._iceberg_table.schema().find_field(
+                self.replication_key
+            )
+            if isinstance(replication_key_field.field_type, (TimestampType)):
+                # Remove offset from replication key if not supported.
+                start_value = start_value.split("+")[0]
+
             self.logger.info(
                 "Filtering records for replication key %s greater than %s.",
                 self.replication_key,
                 start_value,
             )
-
             filter_expression = GreaterThan(self.replication_key, start_value)
         batch_reader = self._iceberg_table.scan(
             row_filter=filter_expression,
