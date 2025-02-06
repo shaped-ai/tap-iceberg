@@ -132,6 +132,9 @@ class TapIceberg(Tap):
                 self.config["client_iam_role_arn"],
                 role_session_name,
             )
+            os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
+            os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
+            os.environ["AWS_SESSION_TOKEN"] = client_session_token
             credentials = Credentials(
                 access_key=client_access_key_id,
                 secret_key=client_secret_access_key,
