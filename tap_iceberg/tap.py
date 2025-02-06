@@ -127,6 +127,11 @@ class TapIceberg(Tap):
         # refreshable credentials.
         if self.config.get("client_iam_role_arn"):
             role_session_name = "TapIceberg"
+            self.logger.info(
+                "Assuming role %s with session name %s.",
+                self.config["client_iam_role_arn"],
+                role_session_name,
+            )
             credentials = Credentials(
                 access_key=client_access_key_id,
                 secret_key=client_secret_access_key,
