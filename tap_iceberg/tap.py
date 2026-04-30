@@ -94,13 +94,13 @@ class TapIceberg(Tap):
                 tap_stream_id = f"{table[0]}-{table[1]}"
                 try:
                     iceberg_table = catalog.load_table(table_id)
-                except NoSuchPropertyException:
-                    self.logger.debug(
-                        f"Skipping {table_id}: missing table_type property, not an "
-                        "Iceberg table.",
-                        table_id,
-                    )
-                    continue
+                except (KeyError, Exception) as e:
+                    if "Parameters" in str(e) or "table_type" in str(e):
+                        self.logger.debug(
+                            f"Skipping {table_id}: not a valid Iceberg table ({e})."
+                        )
+                        continue
+                    raise
                 discovered_streams.append(
                     IcebergTableStream(
                         self,
