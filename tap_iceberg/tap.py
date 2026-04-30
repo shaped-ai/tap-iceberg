@@ -82,8 +82,9 @@ class TapIceberg(Tap):
     def discover_streams(self) -> list[IcebergTableStream]:
         """Return a list of discovered streams."""
         from tap_iceberg.streams import (
-            IcebergTableStream,  # Local import to avoid circular dependency
+            IcebergTableStream,
         )
+        from pyiceberg.exceptions import NoSuchPropertyException
 
         catalog = self._get_catalog()
         discovered_streams = []
@@ -91,7 +92,15 @@ class TapIceberg(Tap):
             for table in catalog.list_tables(namespace):
                 table_id = f"{table[0]}.{table[1]}"
                 tap_stream_id = f"{table[0]}-{table[1]}"
-                iceberg_table = catalog.load_table(table_id)
+                try:
+                    iceberg_table = catalog.load_table(table_id)
+                except (KeyError, Exception) as e:
+                    if "Parameters" in str(e) or "table_type" in str(e):
+                        self.logger.debug(
+                            f"Skipping {table_id}: not a valid Iceberg table ({e})."
+                        )
+                        continue
+                    raise
                 discovered_streams.append(
                     IcebergTableStream(
                         self,
@@ -99,7 +108,6 @@ class TapIceberg(Tap):
                         iceberg_table=iceberg_table,
                     )
                 )
-
         return discovered_streams
 
     def _get_catalog(self) -> Catalog:
