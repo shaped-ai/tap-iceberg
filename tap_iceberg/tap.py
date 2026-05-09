@@ -140,16 +140,22 @@ class TapIceberg(Tap):
                 self.config["client_iam_role_arn"],
                 role_session_name,
             )
-            os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
-            os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
-            os.environ["AWS_SESSION_TOKEN"] = client_session_token
-            credentials = Credentials(
-                access_key=client_access_key_id,
-                secret_key=client_secret_access_key,
-                token=client_session_token,
-            )
+            if client_access_key_id:
+                os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
+            if client_secret_access_key:
+                os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
+            if client_session_token:
+                os.environ["AWS_SESSION_TOKEN"] = client_session_token
+
+            base_credentials = None
+            if client_access_key_id and client_secret_access_key:
+                base_credentials = Credentials(
+                    access_key=client_access_key_id,
+                    secret_key=client_secret_access_key,
+                    token=client_session_token,
+                )
             botocore_session = get_refreshable_botocore_session(
-                source_credentials=credentials,
+                source_credentials=base_credentials,
                 assume_role_arn=self.config["client_iam_role_arn"],
                 role_session_name=role_session_name,
             )

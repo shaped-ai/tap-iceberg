@@ -24,17 +24,27 @@ def get_refreshable_botocore_session(
             aws_secret_access_key=source_credentials.secret_key,
             aws_session_token=source_credentials.token,
         )
+        fetcher_source = source_credentials
     else:
         boto3_session = Session()
+        fetcher_source = boto3_session.get_credentials()
+        if fetcher_source is None:
+            msg = (
+                "No AWS credentials found to assume the IAM role. Configure "
+                "client_access_key_id and client_secret_access_key, or set up "
+                "default credentials (e.g. AWS_PROFILE, ~/.aws/credentials, "
+                "aws sso login)."
+            )
+            raise ValueError(msg)
 
     extra_args = {}
     if role_session_name:
         extra_args["RoleSessionName"] = role_session_name
     fetcher = AssumeRoleCredentialFetcher(
         client_creator=boto3_session.client,
-        source_credentials=source_credentials,
+        source_credentials=fetcher_source,
         role_arn=assume_role_arn,
-        extra_args={},
+        extra_args=extra_args,
     )
     refreshable_credentials = DeferredRefreshableCredentials(
         method="assume-role",

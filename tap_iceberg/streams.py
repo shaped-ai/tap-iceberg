@@ -6,10 +6,12 @@ import sys
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
+import pyarrow as pa
 from pyiceberg.expressions import AlwaysTrue, GreaterThan
 from pyiceberg.types import TimestampType
 from singer_sdk import Stream  # JSON Schema typing helpers
 
+from tap_iceberg.map_json import normalize_pyarrow_map_for_json
 from tap_iceberg.utils import generate_schema_from_pyarrow
 
 if TYPE_CHECKING:
@@ -37,6 +39,10 @@ class IcebergTableStream(Stream):
         schema = generate_schema_from_pyarrow(iceberg_table.schema().as_arrow())
         super().__init__(tap, schema, name)
         self._iceberg_table = iceberg_table
+        arrow_schema = iceberg_table.schema().as_arrow()
+        self._map_column_names = frozenset(
+            field.name for field in arrow_schema if pa.types.is_map(field.type)
+        )
 
         sort_fields = self._iceberg_table.sort_order().fields
         if len(sort_fields) == 1:
@@ -77,6 +83,11 @@ class IcebergTableStream(Stream):
         for batch in batch_reader:
             records = batch.to_pylist()
             for record in records:
+                if self._map_column_names:
+                    record = dict(record)
+                    for col in self._map_column_names:
+                        if col in record:
+                            record[col] = normalize_pyarrow_map_for_json(record[col])
                 yield self._format_record(record, formatters)
 
     def _create_formatters(self) -> dict[str, Callable[[Any], Any]]:
