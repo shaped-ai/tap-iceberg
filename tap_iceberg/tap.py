@@ -65,15 +65,20 @@ class TapIceberg(Tap):
             "client_iam_role_arn",
             th.StringType,
             required=False,
-            description="Optional second-hop IAM role ARN (customer data role)",
+            description=(
+                "Second-hop IAM role ARN (customer Glue/lake reader) after "
+                "customer_data_access_role_arn when using IRSA; trust must allow the "
+                "first-hop role (not necessarily the pod identity)"
+            ),
         ),
         th.Property(
             "customer_data_access_role_arn",
             th.StringType,
             required=False,
             description=(
-                "Shaped intermediary IAM role ARN (first AssumeRole hop from "
-                "IRSA/pod identity); also readable from CUSTOMER_DATA_ACCESS_ROLE_ARN"
+                "First AssumeRole hop from IRSA/pod identity (often "
+                "`CustomerS3DataAccessRole` in your ops account); also readable from env "
+                "TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN or CUSTOMER_DATA_ACCESS_ROLE_ARN"
             ),
         ),
         th.Property(

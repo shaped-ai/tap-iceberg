@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Mapping, MutableMapping, Optional
+from typing import Any, Callable, Mapping, MutableMapping, NamedTuple, Optional
 
 from boto3 import Session as Boto3Session
 from botocore.config import Config
@@ -32,15 +32,37 @@ CredentialModeRefreshableIrsaClientRoleOnly = "refreshable_irsa_client_role_only
 CredentialModeDefaultChainDirectCatalog = "default_chain_direct_catalog"
 
 
-def _customer_data_arn(
+class CustomerDataAccessArnResolution(NamedTuple):
+    """Resolved first-hop AssumeRole ARN and where it came from."""
+
+    arn: Optional[str]
+    """Effective ARN after config-then-env resolution."""
+    source: str
+    """``config``, ``env:<VAR_NAME>``, or ``none``."""
+
+
+CUSTOMER_DATA_ACCESS_ENV_KEYS = (
+    "TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN",
+    "CUSTOMER_DATA_ACCESS_ROLE_ARN",
+)
+
+
+def _customer_data_access_arn_resolve(
     config: Mapping[str, Any],
     getenv: Callable[[str], Optional[str]],
-) -> Optional[str]:
-    v = (
-        (config.get("customer_data_access_role_arn") or "").strip()
-        or (getenv("CUSTOMER_DATA_ACCESS_ROLE_ARN") or "").strip()
-    )
-    return v or None
+) -> CustomerDataAccessArnResolution:
+    """Resolve first-hop role (IRSA → CustomerS3DataAccessRole) ARN."""
+
+    cfg = (config.get("customer_data_access_role_arn") or "").strip()
+    if cfg:
+        return CustomerDataAccessArnResolution(cfg, "config")
+
+    for key in CUSTOMER_DATA_ACCESS_ENV_KEYS:
+        cand = (getenv(key) or "").strip()
+        if cand:
+            return CustomerDataAccessArnResolution(cand, f"env:{key}")
+
+    return CustomerDataAccessArnResolution(None, "none")
 
 
 def _assume_extra(role_session_name: str) -> dict[str, Any]:
@@ -90,19 +112,34 @@ def attach_catalog_aws_credentials(
 
         * Legacy AKIA + secret (+ token) wins:
             assume ``client_iam_role_arn`` with static base creds, or static keys only.
-        * Else ``CUSTOMER_DATA_ACCESS_ROLE_ARN`` / ``customer_data_access_role_arn``
-          with default-chain base credentials (IRSA), optional second hop via
-          ``client_iam_role_arn``.
-        * Else ``client_iam_role_arn`` alone with default chain.
+        * Else ``customer_data_access_role_arn`` env:
+            ``TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN`` or ``CUSTOMER_DATA_ACCESS_ROLE_ARN``,
+            resolved with default-chain (IRSA), optional second AssumeRole hop via
+            ``client_iam_role_arn`` (Glue / lake reader in the customer's account).
+        * Else ``client_iam_role_arn`` alone with default chain (caller must satisfy the
+          reader role trust policy).
         * Else rely on boto3 ambient defaults (**may not** reach customer buckets).
     """
     access_key = config.get("client_access_key_id")
     secret_key = config.get("client_secret_access_key")
     session_token = config.get("client_session_token")
     client_region = config.get("client_region")
-    customer_arn = _customer_data_arn(config, getenv)
+    customer_arn_res = _customer_data_access_arn_resolve(config, getenv)
+    customer_arn = customer_arn_res.arn
     client_iam_arn = (
         (config.get("client_iam_role_arn") or "").strip() or None
+    )
+
+    env_audit = "; ".join(
+        f"{k}={'set' if bool((getenv(k) or '').strip()) else 'unset'}"
+        for k in CUSTOMER_DATA_ACCESS_ENV_KEYS
+    )
+    logger.info(
+        "Customer data access role ARN: resolution_source=%s effective_arn_suffix=%s. "
+        "Env vars: %s",
+        customer_arn_res.source,
+        customer_arn[-12:] if customer_arn else "none",
+        env_audit,
     )
 
     if client_region:
@@ -160,8 +197,8 @@ def attach_catalog_aws_credentials(
         caller = base_sess.get_credentials()
         if caller is None:
             raise ValueError(
-                "CUSTOMER_DATA_ACCESS_ROLE_ARN is set but the default credential "
-                "chain yielded no caller credentials (verify IRSA / pod identity)."
+                "First-hop intermediary role ARN is set but the default credential chain "
+                "yielded no caller credentials (verify IRSA / pod identity)."
             )
 
         fetcher_customer = AssumeRoleCredentialFetcher(
@@ -215,6 +252,16 @@ def attach_catalog_aws_credentials(
                 "client_iam_role_arn is set without static keys "
                 "and the default credential chain has no caller credentials.",
             )
+
+        logger.warning(
+            "One-hop STS: ambient caller AssumeRole directly into configured "
+            "client_iam_role_arn (...%s). If AssumeRole yields AccessDenied, the reader "
+            "role trust likely requires chaining: set "
+            "customer_data_access_role_arn (or TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN / "
+            "CUSTOMER_DATA_ACCESS_ROLE_ARN) for the intermediary role your pod identity "
+            "may assume before this reader role.",
+            client_iam_arn[-12:],
+        )
 
         fetcher = AssumeRoleCredentialFetcher(
             client_creator=client_creator,

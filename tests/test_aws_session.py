@@ -188,3 +188,50 @@ def test_customer_data_arn_from_env_when_config_empty() -> None:
     assert RecordingAssume.captures == [
         "arn:aws:iam::777:role/EnvCustomerDataAccess",
     ]
+
+
+def test_customer_data_arn_env_tap_prefixed_wins_over_plain_env() -> None:
+    class RecordingAssume(AssumeRoleCredentialFetcher):
+        captures: ClassVar[list[str]] = []
+
+        def __init__(  # type: ignore[no-untyped-def]
+            self,
+            client_creator,
+            source_credentials,
+            role_arn,
+            extra_args=None,
+            **kwargs,
+        ):
+            RecordingAssume.captures.append(role_arn)
+            super().__init__(
+                client_creator,
+                source_credentials,
+                role_arn,
+                extra_args=extra_args,
+                **kwargs,
+            )
+
+    RecordingAssume.captures.clear()
+    canned = Credentials("IRSA-ID", "IRSA-SKEY")
+
+    def getenv(name: str) -> Optional[str]:
+        if name == "TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN":
+            return "arn:aws:iam::888:role/TapPrefixedHop"
+        if name == "CUSTOMER_DATA_ACCESS_ROLE_ARN":
+            return "arn:aws:iam::777:role/PlainEnvHop"
+        return None
+
+    with patch.object(Boto3Session, "get_credentials", lambda self: canned):
+        with patch.object(
+            aws_session,
+            "AssumeRoleCredentialFetcher",
+            RecordingAssume,
+        ):
+            attach_catalog_aws_credentials(
+                {},
+                config={},
+                logger=MagicMock(),
+                getenv=getenv,
+            )
+
+    assert RecordingAssume.captures[0] == "arn:aws:iam::888:role/TapPrefixedHop"
