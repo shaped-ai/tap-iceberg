@@ -18,6 +18,14 @@ from botocore.credentials import Credentials
 from botocore.credentials import DeferredRefreshableCredentials
 from botocore.session import Session as BotoSession
 
+# PyIceberg ``PyArrowFileIO`` reads these for S3 only; ``GlueCatalog`` does not use them
+# for the Glue client (it uses ``botocore_session``), so we avoid overriding refreshable Glue
+# credentials while fixing S3 HeadObject identity. See apache/iceberg-python ``pyarrow.py``.
+_PYICEBERG_S3_ACCESS_KEY_ID = "s3.access-key-id"
+_PYICEBERG_S3_SECRET_ACCESS_KEY = "s3.secret-access-key"
+_PYICEBERG_S3_SESSION_TOKEN = "s3.session-token"
+_PYICEBERG_S3_REGION = "s3.region"
+
 STS_DURATION_SECONDS_DEFAULT = 3600
 
 _STS_RETRY_CONFIG = Config(
@@ -96,6 +104,50 @@ def _defer_assume(
     )
 
 
+def _inject_pyiceberg_s3_credentials_from_botocore_session(
+    boto_session: BotoSession,
+    catalog_properties: MutableMapping[str, Any],
+    *,
+    client_region: Optional[str],
+    logger: logging.Logger,
+) -> None:
+    """Mirror assumed credentials into PyIceberg S3 props.
+
+    ``GlueCatalog`` uses ``botocore_session`` for Glue APIs, but metadata reads use
+    ``PyArrowFileIO``, which ignores ``botocore_session``. Setting ``client.role-arn``
+    makes PyArrow assume that role using the **pod default chain**, bypassing chained STS
+    (ACCESS_DENIED on customer buckets). Snapshot frozen credentials onto ``s3.*`` keys so
+    S3 matches Glue without overriding Glue ``boto3.Session`` credential kwargs.
+
+    Botocore still refreshes credentials for Glue; **S3 reads reuse this snapshot** until
+    the catalog object is recreated (typical tap runs reload once per CLI invocation).
+    """
+
+    credentials = boto_session.get_credentials()
+    if credentials is None:
+        logger.warning(
+            "Cannot inject PyIceberg S3 credentials: botocore session has no credentials.",
+        )
+        return
+
+    frozen = credentials.get_frozen_credentials()
+    catalog_properties[_PYICEBERG_S3_ACCESS_KEY_ID] = frozen.access_key
+    catalog_properties[_PYICEBERG_S3_SECRET_ACCESS_KEY] = frozen.secret_key
+    tok = frozen.token
+    if tok:
+        catalog_properties[_PYICEBERG_S3_SESSION_TOKEN] = tok
+    else:
+        catalog_properties.pop(_PYICEBERG_S3_SESSION_TOKEN, None)
+    if client_region:
+        catalog_properties.setdefault(_PYICEBERG_S3_REGION, client_region)
+
+    logger.debug(
+        "Injected PyIceberg S3 credential snapshot for HeadObject reads "
+        "(access_key_suffix=%s)",
+        frozen.access_key[-4:] if frozen.access_key else "",
+    )
+
+
 def attach_catalog_aws_credentials(
     catalog_properties: MutableMapping[str, Any],
     *,
@@ -107,6 +159,11 @@ def attach_catalog_aws_credentials(
 
     Exactly one choke point for STS / boto sessions consumed by PyIceberg.
     Logs a credential mode suitable for observability (**no secrets**).
+
+    Refreshable AssumeRole chains attach ``botocore_session`` for Glue APIs and mirror the
+    current frozen credentials into PyIceberg ``s3.*`` properties so PyArrow S3 reads use the
+    same identity (PyArrow ignores ``botocore_session`` and ``client.role-arn`` would otherwise
+    re-assume using only the pod chain).
 
     Resolution order::
 
@@ -178,8 +235,12 @@ def attach_catalog_aws_credentials(
                 method="sts-assume-role-legacy-env",
             )
             catalog_properties["botocore_session"] = boto_session
-            catalog_properties["client.role-arn"] = client_iam_arn
-            catalog_properties["client.session-name"] = "TapIcebergLegacyAssume"
+            _inject_pyiceberg_s3_credentials_from_botocore_session(
+                boto_session,
+                catalog_properties,
+                client_region=client_region,
+                logger=logger,
+            )
             return CredentialModeLegacyEnv
 
         catalog_properties["client.access-key-id"] = access_key
@@ -213,27 +274,27 @@ def attach_catalog_aws_credentials(
         )
 
         if client_iam_arn:
-            sess_name_client = "TapIcebergClientRole"
             fetcher_client = AssumeRoleCredentialFetcher(
                 client_creator=client_creator,
                 source_credentials=deferred_customer,
                 role_arn=client_iam_arn,
-                extra_args=_assume_extra(sess_name_client),
+                extra_args=_assume_extra("TapIcebergClientRole"),
             )
             final = _defer_assume(fetcher_client, method="sts-client-role")
             effective_arn = client_iam_arn
-            session_hint = sess_name_client
         else:
-            sess_name_customer = "TapIcebergCustomerDataAccess"
             final = deferred_customer
             effective_arn = customer_arn
-            session_hint = sess_name_customer
 
         boto_session = BotoSession()
         boto_session._credentials = final  # noqa: SLF001
         catalog_properties["botocore_session"] = boto_session
-        catalog_properties["client.role-arn"] = effective_arn
-        catalog_properties["client.session-name"] = session_hint
+        _inject_pyiceberg_s3_credentials_from_botocore_session(
+            boto_session,
+            catalog_properties,
+            client_region=client_region,
+            logger=logger,
+        )
 
         logger.info(
             "AWS credential mode: %s — chained refreshable STS (effective role ...%s)",
@@ -275,8 +336,12 @@ def attach_catalog_aws_credentials(
             method="sts-default-chain-assume",
         )
         catalog_properties["botocore_session"] = boto_session
-        catalog_properties["client.role-arn"] = client_iam_arn
-        catalog_properties["client.session-name"] = "TapIcebergCallerAssume"
+        _inject_pyiceberg_s3_credentials_from_botocore_session(
+            boto_session,
+            catalog_properties,
+            client_region=client_region,
+            logger=logger,
+        )
 
         logger.info(
             "AWS credential mode: %s — AssumeRole (...%s) from ambient caller",

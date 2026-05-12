@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 from pyiceberg.catalog import load_catalog
 from singer_sdk import Tap
@@ -14,6 +14,31 @@ if TYPE_CHECKING:
     from pyiceberg.catalog import Catalog
 
     from tap_iceberg.streams import IcebergTableStream
+
+_REDACTED_CATALOG_DEBUG_KEYS = frozenset(
+    {
+        "client.access-key-id",
+        "client.secret-access-key",
+        "client.session-token",
+        "s3.access-key-id",
+        "s3.secret-access-key",
+        "s3.session-token",
+    },
+)
+
+
+def _catalog_properties_for_debug_log(props: Mapping[str, object]) -> dict[str, object]:
+    """Avoid dumping raw AWS keys when catalog_properties are logged at DEBUG."""
+
+    safe: dict[str, object] = {}
+    for key, val in props.items():
+        if key in _REDACTED_CATALOG_DEBUG_KEYS:
+            safe[key] = "<redacted>"
+        elif key == "botocore_session":
+            safe[key] = "<botocore.Session>"
+        else:
+            safe[key] = val
+    return safe
 
 
 class TapIceberg(Tap):
@@ -138,7 +163,7 @@ class TapIceberg(Tap):
 
         self.logger.debug(
             "Loading Iceberg catalog with properties: %s",
-            catalog_properties,
+            _catalog_properties_for_debug_log(catalog_properties),
         )
 
         return load_catalog(
