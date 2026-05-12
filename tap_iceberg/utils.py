@@ -1,58 +1,8 @@
 from __future__ import annotations
 
 import pyarrow as pa
-from boto3 import Session
-from botocore.credentials import (
-    AssumeRoleCredentialFetcher,
-    Credentials,
-    DeferredRefreshableCredentials,
-)
-from botocore.session import Session as BotoSession
 from pyarrow import DataType
 from singer_sdk import typing as th
-
-
-def get_refreshable_botocore_session(
-    source_credentials: Credentials | None,
-    assume_role_arn: str,
-    role_session_name: str | None = None,
-) -> BotoSession:
-    """Get a refreshable botocore session for assuming a role."""
-    if source_credentials is not None:
-        boto3_session = Session(
-            aws_access_key_id=source_credentials.access_key,
-            aws_secret_access_key=source_credentials.secret_key,
-            aws_session_token=source_credentials.token,
-        )
-        fetcher_source = source_credentials
-    else:
-        boto3_session = Session()
-        fetcher_source = boto3_session.get_credentials()
-        if fetcher_source is None:
-            msg = (
-                "No AWS credentials found to assume the IAM role. Configure "
-                "client_access_key_id and client_secret_access_key, or set up "
-                "default credentials (e.g. AWS_PROFILE, ~/.aws/credentials, "
-                "aws sso login)."
-            )
-            raise ValueError(msg)
-
-    extra_args = {}
-    if role_session_name:
-        extra_args["RoleSessionName"] = role_session_name
-    fetcher = AssumeRoleCredentialFetcher(
-        client_creator=boto3_session.client,
-        source_credentials=fetcher_source,
-        role_arn=assume_role_arn,
-        extra_args=extra_args,
-    )
-    refreshable_credentials = DeferredRefreshableCredentials(
-        method="assume-role",
-        refresh_using=fetcher.fetch_credentials,
-    )
-    botocore_session = BotoSession()
-    botocore_session._credentials = refreshable_credentials  # noqa: SLF001
-    return botocore_session
 
 
 def pyarrow_to_jsonschema_type(arrow_type: DataType) -> th.JSONTypeHelper:

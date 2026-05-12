@@ -26,6 +26,7 @@ python = ">=3.8,<3.12,!=3.9.7"
 importlib-resources = { version = "==6.4.*", python = "<3.9" }
 singer-sdk = { version = "~=0.38.0", extras = ["faker",] }
 setuptools = ">=75.3.0,<81"
+boto3 = { version = "~1.35.0" }
 fs-s3fs = { version = "~=1.1.1", optional = true }
 pyiceberg = { git = "https://github.com/shaped-ai/iceberg-python", branch = "main", extras = ["s3fs", "glue", "hive", "sql-sqlite"] }
 pyarrow = { version = "~17.0.0" }
