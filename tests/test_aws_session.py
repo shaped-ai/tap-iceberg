@@ -130,13 +130,16 @@ def test_second_get_frozen_triggers_second_assume_when_cache_bypassed() -> None:
                         getenv=lambda _k: None,
                     )
 
-    sess_obj = catalog["botocore_session"]
-    crs = sess_obj.get_credentials()
+                    sess_obj = catalog["botocore_session"]
+                    crs = sess_obj.get_credentials()
 
-    crs.get_frozen_credentials()
-    crs.get_frozen_credentials()
+                    crs.get_frozen_credentials()
+                    # Botocore skips a second STS round-trip while creds look fresh;
+                    # force advisory refresh to exercise _get_credentials again.
+                    crs._expiry_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+                    crs.get_frozen_credentials()
 
-    assert calls["n"] >= 2
+                    assert calls["n"] >= 2
 
 
 def test_customer_data_arn_from_env_when_config_empty() -> None:
