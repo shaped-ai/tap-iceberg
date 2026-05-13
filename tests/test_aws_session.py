@@ -62,7 +62,7 @@ def test_intermediary_then_customer_roles_order() -> None:
         ):
             with patch.object(
                 aws_session,
-                "_inject_pyiceberg_s3_credentials_from_botocore_session",
+                "_wire_refreshing_pyarrow_io",
                 MagicMock(),
             ):
                 attach_catalog_aws_credentials(
@@ -135,7 +135,13 @@ def test_second_get_frozen_triggers_second_assume_when_cache_bypassed() -> None:
                         getenv=lambda _k: None,
                     )
 
-                    assert catalog["s3.access-key-id"] == "TEMP1"
+                    assert (
+                        catalog["py-io-impl"]
+                        == "tap_iceberg.refreshing_pyarrow_io.RefreshingPyArrowFileIO"
+                    )
+                    assert isinstance(
+                        catalog["tap_iceberg.botocore_session_key"], str
+                    )
 
                     sess_obj = catalog["botocore_session"]
                     crs = sess_obj.get_credentials()
@@ -186,7 +192,7 @@ def test_customer_data_arn_from_env_when_config_empty() -> None:
         ):
             with patch.object(
                 aws_session,
-                "_inject_pyiceberg_s3_credentials_from_botocore_session",
+                "_wire_refreshing_pyarrow_io",
                 MagicMock(),
             ):
                 mode = attach_catalog_aws_credentials(
@@ -241,7 +247,7 @@ def test_customer_data_arn_env_tap_prefixed_wins_over_plain_env() -> None:
         ):
             with patch.object(
                 aws_session,
-                "_inject_pyiceberg_s3_credentials_from_botocore_session",
+                "_wire_refreshing_pyarrow_io",
                 MagicMock(),
             ):
                 attach_catalog_aws_credentials(

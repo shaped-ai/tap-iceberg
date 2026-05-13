@@ -18,13 +18,7 @@ from botocore.credentials import Credentials
 from botocore.credentials import DeferredRefreshableCredentials
 from botocore.session import Session as BotoSession
 
-# PyIceberg ``PyArrowFileIO`` reads these for S3 only; ``GlueCatalog`` does not use them
-# for the Glue client (it uses ``botocore_session``), so we avoid overriding refreshable Glue
-# credentials while fixing S3 HeadObject identity. See apache/iceberg-python ``pyarrow.py``.
-_PYICEBERG_S3_ACCESS_KEY_ID = "s3.access-key-id"
-_PYICEBERG_S3_SECRET_ACCESS_KEY = "s3.secret-access-key"
-_PYICEBERG_S3_SESSION_TOKEN = "s3.session-token"
-_PYICEBERG_S3_REGION = "s3.region"
+from tap_iceberg.refreshing_pyarrow_io import attach_refreshing_pyarrow_io
 
 STS_DURATION_SECONDS_DEFAULT = 3600
 
@@ -104,47 +98,41 @@ def _defer_assume(
     )
 
 
-def _inject_pyiceberg_s3_credentials_from_botocore_session(
+def _wire_refreshing_pyarrow_io(
     boto_session: BotoSession,
     catalog_properties: MutableMapping[str, Any],
     *,
     client_region: Optional[str],
     logger: logging.Logger,
 ) -> None:
-    """Mirror assumed credentials into PyIceberg S3 props.
+    """Wire PyIceberg to our refreshing PyArrow FileIO.
 
-    ``GlueCatalog`` uses ``botocore_session`` for Glue APIs, but metadata reads use
-    ``PyArrowFileIO``, which ignores ``botocore_session``. Setting ``client.role-arn``
-    makes PyArrow assume that role using the **pod default chain**, bypassing chained STS
-    (ACCESS_DENIED on customer buckets). Snapshot frozen credentials onto ``s3.*`` keys so
-    S3 matches Glue without overriding Glue ``boto3.Session`` credential kwargs.
+    PyArrow's :class:`pyarrow.fs.S3FileSystem` is built once from string properties
+    and the underlying C++ AWS SDK does not refresh those credentials. Snapshotting
+    ``s3.access-key-id`` / ``s3.secret-access-key`` / ``s3.session-token`` works for
+    the first ``DurationSeconds`` window only, then long-running syncs fail on
+    HeadObject with an expired session token.
 
-    Botocore still refreshes credentials for Glue; **S3 reads reuse this snapshot** until
-    the catalog object is recreated (typical tap runs reload once per CLI invocation).
+    Instead we register the chained ``botocore_session`` and let
+    :class:`tap_iceberg.refreshing_pyarrow_io.RefreshingPyArrowFileIO` rebuild the
+    ``S3FileSystem`` whenever its current STS credentials approach expiry.
     """
 
-    credentials = boto_session.get_credentials()
-    if credentials is None:
+    if boto_session.get_credentials() is None:
         logger.warning(
-            "Cannot inject PyIceberg S3 credentials: botocore session has no credentials.",
+            "Cannot wire refreshing PyArrow FileIO: boto session has no credentials.",
         )
         return
 
-    frozen = credentials.get_frozen_credentials()
-    catalog_properties[_PYICEBERG_S3_ACCESS_KEY_ID] = frozen.access_key
-    catalog_properties[_PYICEBERG_S3_SECRET_ACCESS_KEY] = frozen.secret_key
-    tok = frozen.token
-    if tok:
-        catalog_properties[_PYICEBERG_S3_SESSION_TOKEN] = tok
-    else:
-        catalog_properties.pop(_PYICEBERG_S3_SESSION_TOKEN, None)
-    if client_region:
-        catalog_properties.setdefault(_PYICEBERG_S3_REGION, client_region)
-
+    key = attach_refreshing_pyarrow_io(
+        catalog_properties,  # type: ignore[arg-type]
+        boto_session,
+        client_region=client_region,
+    )
     logger.debug(
-        "Injected PyIceberg S3 credential snapshot for HeadObject reads "
-        "(access_key_suffix=%s)",
-        frozen.access_key[-4:] if frozen.access_key else "",
+        "Wired RefreshingPyArrowFileIO (session_key_suffix=%s, region=%s)",
+        key[-4:],
+        client_region or "<ambient>",
     )
 
 
@@ -160,10 +148,11 @@ def attach_catalog_aws_credentials(
     Exactly one choke point for STS / boto sessions consumed by PyIceberg.
     Logs a credential mode suitable for observability (**no secrets**).
 
-    Refreshable AssumeRole chains attach ``botocore_session`` for Glue APIs and mirror the
-    current frozen credentials into PyIceberg ``s3.*`` properties so PyArrow S3 reads use the
-    same identity (PyArrow ignores ``botocore_session`` and ``client.role-arn`` would otherwise
-    re-assume using only the pod chain).
+    Refreshable AssumeRole chains attach ``botocore_session`` for Glue APIs and wire
+    :class:`tap_iceberg.refreshing_pyarrow_io.RefreshingPyArrowFileIO` as ``py-io-impl``
+    so PyArrow S3 reads also follow chained STS expiry — without this, the C++ AWS SDK
+    used by ``pyarrow.fs.S3FileSystem`` keeps the first frozen session token and long
+    syncs eventually hit ``HeadObject`` 400/UNKNOWN once that token expires.
 
     Resolution order::
 
@@ -235,7 +224,7 @@ def attach_catalog_aws_credentials(
                 method="sts-assume-role-legacy-env",
             )
             catalog_properties["botocore_session"] = boto_session
-            _inject_pyiceberg_s3_credentials_from_botocore_session(
+            _wire_refreshing_pyarrow_io(
                 boto_session,
                 catalog_properties,
                 client_region=client_region,
@@ -289,7 +278,7 @@ def attach_catalog_aws_credentials(
         boto_session = BotoSession()
         boto_session._credentials = final  # noqa: SLF001
         catalog_properties["botocore_session"] = boto_session
-        _inject_pyiceberg_s3_credentials_from_botocore_session(
+        _wire_refreshing_pyarrow_io(
             boto_session,
             catalog_properties,
             client_region=client_region,
@@ -336,7 +325,7 @@ def attach_catalog_aws_credentials(
             method="sts-default-chain-assume",
         )
         catalog_properties["botocore_session"] = boto_session
-        _inject_pyiceberg_s3_credentials_from_botocore_session(
+        _wire_refreshing_pyarrow_io(
             boto_session,
             catalog_properties,
             client_region=client_region,
