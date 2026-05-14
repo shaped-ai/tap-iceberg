@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -25,6 +28,11 @@ else:
     pass
 
 
+logger = logging.getLogger(__name__)
+
+_TAP_METADATA_ENV = "TAP_ICEBERG__METADATA"
+
+
 class IcebergTableStream(Stream):
     """Stream class for an Iceberg table."""
 
@@ -43,18 +51,76 @@ class IcebergTableStream(Stream):
             field.name for field in arrow_schema if pa.types.is_map(field.type)
         )
 
-    def _get_stream_metadata_value(self, key: str, default=None):
-        """Read a non-spec key from this stream's root metadata entry.
+    def _tap_metadata_bundle_from_env(self) -> dict[str, Any] | None:
+        """Parse TAP_ICEBERG__METADATA JSON (Magnus / Meltano env).
 
-        Magnus injects window-size-hours and start-replication-key-value alongside
-        replication-key in TAP_ICEBERG__METADATA. Singer SDK preserves unknown keys
-        in the underlying dict but doesn't expose them as named attributes.
+        Parsed once per tap instance and cached on ``tap`` so repeated lookups stay
+        cheap.
         """
+        tap = self._tap
+        cache_attr = "_tap_iceberg_metadata_bundle_from_env_v1"
+        if hasattr(tap, cache_attr):
+            return getattr(tap, cache_attr)
+
+        raw = os.environ.get(_TAP_METADATA_ENV)
+        parsed: dict[str, Any] | None = None
+        if raw:
+            try:
+                loaded = json.loads(raw)
+                if isinstance(loaded, dict):
+                    parsed = loaded
+                else:
+                    logger.warning(
+                        "%s must decode to an object at the top level, got %s",
+                        _TAP_METADATA_ENV,
+                        type(loaded).__name__,
+                    )
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Invalid JSON in %s: %s",
+                    _TAP_METADATA_ENV,
+                    exc,
+                )
+        setattr(tap, cache_attr, parsed)
+        return getattr(tap, cache_attr)
+
+    def _merged_tap_iceberg_metadata_overlay(self) -> dict[str, Any]:
+        """Return merged metadata for this stream id from TAP_ICEBERG__METADATA.
+
+        Meltano typically passes a wildcard block under ``'*'``. Optional per-stream
+        keys matching :attr:`~singer_sdk.streams.core.Stream.name` override the same
+        keys from ``'*'``.
+        """
+        bundle = self._tap_metadata_bundle_from_env()
+        overlay: dict[str, Any] = {}
+        if not isinstance(bundle, dict):
+            return overlay
+        wild = bundle.get("*")
+        if isinstance(wild, dict):
+            overlay.update(wild)
+        specific = bundle.get(self.name)
+        if isinstance(specific, dict):
+            overlay.update(specific)
+        return overlay
+
+    def _get_stream_metadata_value(self, key: str, default=None):
+        """Read a Magnus extension key supplied via TAP_ICEBERG__METADATA.
+
+        Singer's ``StreamMetadata.from_dict()`` only keeps Singer-spec catalogue
+        fields, so entries like ``window-size-hours`` are **dropped** when the
+        catalog is parsed—they must be read from the raw env blob instead.
+
+        Fallback: if catalogue root metadata is stored as a ``dict``, read from
+        there (useful for hand-written catalogs in tests).
+        """
+        overlay = self._merged_tap_iceberg_metadata_overlay()
+        if key in overlay:
+            return overlay[key]
+
         root_md = self.metadata.get((), None)
-        if root_md is None:
-            return default
-        if hasattr(root_md, "get"):
+        if isinstance(root_md, dict):
             return root_md.get(key, default)
+
         return default
 
     @property

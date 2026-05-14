@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -49,14 +50,79 @@ def iceberg_table_mock(mock_batch_reader):
     return tbl
 
 
-def test_incremental_raises_when_window_metadata_missing(mock_tap, iceberg_table_mock):
+def test_incremental_raises_when_window_metadata_missing(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
     stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
     stream.forced_replication_method = "INCREMENTAL"
     stream.replication_key = "updated_at"
-    stream._get_stream_metadata_value = MagicMock(return_value=None)  # type: ignore[method-assign]
 
     with pytest.raises(ValueError, match="window-size-hours"):
         list(stream.get_records())
+
+
+def test_incremental_reads_window_fields_from_env_wildcard(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 6,
+                    "start-replication-key-value": "2024-01-01T00:00:00+00:00",
+                },
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+
+    assert stream._planned_window_end == "2024-01-01T06:00:00+00:00"
+
+
+def test_stream_specific_metadata_overrides_wildcard(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 6,
+                    "start-replication-key-value": "2024-01-01T00:00:00+00:00",
+                },
+                "ns-tbl": {"window-size-hours": 168},
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+
+    assert stream._planned_window_end == "2024-01-08T00:00:00+00:00"
 
 
 def test_incremental_planned_bookmark_is_window_right_edge(mock_tap, iceberg_table_mock):
