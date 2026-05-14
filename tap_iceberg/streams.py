@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import pyarrow as pa
-from pyiceberg.expressions import AlwaysTrue, GreaterThan
-from pyiceberg.types import TimestampType
+from pyiceberg.expressions import AlwaysTrue, And, GreaterThan, LessThanOrEqual
 from singer_sdk import Stream  # JSON Schema typing helpers
 
 from tap_iceberg.map_json import normalize_pyarrow_map_for_json
@@ -44,40 +43,119 @@ class IcebergTableStream(Stream):
             field.name for field in arrow_schema if pa.types.is_map(field.type)
         )
 
-        sort_fields = self._iceberg_table.sort_order().fields
-        if len(sort_fields) == 1:
-            sort_field_source_id = sort_fields[0].source_id
-            sort_field_name = (
-                self._iceberg_table.schema().find_field(sort_field_source_id).name
-            )
-            self._replication_key = sort_field_name
+    def _get_stream_metadata_value(self, key: str, default=None):
+        """Read a non-spec key from this stream's root metadata entry.
+
+        Magnus injects window-size-hours and start-replication-key-value alongside
+        replication-key in TAP_ICEBERG__METADATA. Singer SDK preserves unknown keys
+        in the underlying dict but doesn't expose them as named attributes.
+        """
+        root_md = self.metadata.get((), None)
+        if root_md is None:
+            return default
+        if hasattr(root_md, "get"):
+            return root_md.get(key, default)
+        return default
 
     @property
     def is_sorted(self) -> bool:
-        return not self._iceberg_table.sort_order().is_unsorted
+        """We bypass Singer SDK's per-record bookmark logic entirely (see
+        _increment_stream_state and _finalize_state). Returning True keeps the
+        SDK from creating progress_markers / signposts that we'd then ignore.
+        """
+        return True
+
+    def _increment_stream_state(self, latest_record, *, context=None) -> None:  # noqa: ARG002
+        """No-op: per-record bookmarks are unsafe on randomly-ordered file scans.
+        Bookmark advances only when the whole window completes (_finalize_state).
+        """
+        return
+
+    def _finalize_state(self, state=None) -> None:
+        """Promote the planned window end to the committed bookmark.
+
+        Singer SDK calls this only when get_records returns cleanly (i.e. the
+        whole window was processed). If SIGTERM kills the generator mid-window,
+        this never runs and the bookmark stays where it was.
+        """
+        planned_end = getattr(self, "_planned_window_end", None)
+        if planned_end is not None and self.replication_key:
+            stream_state = state if state is not None else self.get_context_state(
+                None,
+            )
+            stream_state["replication_key"] = self.replication_key
+            stream_state["replication_key_value"] = planned_end
+            self.logger.info(
+                "Window complete; advancing bookmark to %s",
+                planned_end,
+            )
+        super()._finalize_state(state)
+
+    def get_replication_key_signpost(self, context: dict | None = None):  # noqa: ARG002
+        """Bounded by Iceberg row_filter for incremental windows, not utc_now."""
+        return None
 
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
-        """Return a generator of record-type dictionary objects."""
-        filter_expression = AlwaysTrue()
-        self.logger.info("Starting Iceberg table scan.")
-        start_value = self.get_starting_replication_key_value(context)
-        if start_value:
-            replication_key_field = self._iceberg_table.schema().find_field(
-                self.replication_key
-            )
-            if isinstance(replication_key_field.field_type, (TimestampType)):
-                # Remove offset from replication key if not supported.
-                start_value = start_value.split("+")[0]
+        """Yield records from a single closed time window of the Iceberg table.
 
-            self.logger.info(
-                "Filtering records for replication key %s greater than %s.",
-                self.replication_key,
-                start_value,
+        Window = (last_bookmark, last_bookmark + window-size-hours]. PyIceberg's
+        file/manifest order may scatter replication-key values randomly within
+        the unread tail, so we only advance the bookmark when the whole window
+        finishes (handled in _finalize_state). SIGTERM mid-window leaves the
+        bookmark untouched; the next cron retries the same window.
+        """
+        if self.replication_method != "INCREMENTAL":
+            self._planned_window_end = None
+            yield from self._get_records_full_table(context)
+            return
+
+        window_hours = self._get_stream_metadata_value("window-size-hours")
+        bootstrap_start = self._get_stream_metadata_value(
+            "start-replication-key-value",
+        )
+
+        if window_hours is None or bootstrap_start is None:
+            raise ValueError(
+                f"Stream '{self.name}' requires both 'window-size-hours' and "
+                "'start-replication-key-value' in TAP_ICEBERG__METADATA for "
+                "incremental sync.",
             )
-            filter_expression = GreaterThan(self.replication_key, start_value)
-        batch_reader = self._iceberg_table.scan(
-            row_filter=filter_expression,
-        ).to_arrow_batch_reader()
+
+        state_bookmark = self.get_starting_replication_key_value(context)
+        window_start_str = state_bookmark or bootstrap_start
+
+        window_start = datetime.fromisoformat(window_start_str)
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=timezone.utc)
+        window_end = window_start + timedelta(hours=int(window_hours))
+
+        self.logger.info(
+            "Iceberg windowed scan: %s < %s <= %s (window=%sh, source=%s)",
+            window_start.isoformat(),
+            self.replication_key,
+            window_end.isoformat(),
+            window_hours,
+            "state" if state_bookmark else "bootstrap",
+        )
+
+        self._planned_window_end = window_end.isoformat()
+
+        filter_expression = And(
+            GreaterThan(self.replication_key, window_start.isoformat()),
+            LessThanOrEqual(self.replication_key, window_end.isoformat()),
+        )
+        yield from self._scan_and_yield_rows(filter_expression)
+
+    def _get_records_full_table(self, context: dict | None) -> Iterable[dict]:
+        """Non-incremental: scan the whole table."""
+        _ = context
+        self.logger.info("Starting Iceberg table scan.")
+        yield from self._scan_and_yield_rows(AlwaysTrue())
+
+    def _scan_and_yield_rows(self, row_filter: Any) -> Iterable[dict]:
+        batch_reader = (
+            self._iceberg_table.scan(row_filter=row_filter).to_arrow_batch_reader()
+        )
 
         formatters = self._create_formatters()
         for batch in batch_reader:
