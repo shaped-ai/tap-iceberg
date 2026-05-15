@@ -31,8 +31,6 @@ else:
 logger = logging.getLogger(__name__)
 
 _TAP_METADATA_ENV = "TAP_ICEBERG__METADATA"
-# MagicMock taps auto-vivify arbitrary attrs; avoid treating that as cached parse data.
-_METADATA_CACHE_ABSENT = object()
 
 
 class IcebergTableStream(Stream):
@@ -61,9 +59,11 @@ class IcebergTableStream(Stream):
         """
         tap = self._tap
         cache_attr = "_tap_iceberg_metadata_bundle_from_env_v1"
-        cached = getattr(tap, cache_attr, _METADATA_CACHE_ABSENT)
-        if cached is not _METADATA_CACHE_ABSENT:
-            return cached
+        tap_dict = getattr(tap, "__dict__", None)
+        # unittest.mock.MagicMock never raises AttributeError and ignores getattr
+        # defaults, so probe __dict__ explicitly (real taps also store attrs there).
+        if tap_dict is not None and cache_attr in tap_dict:
+            return tap_dict[cache_attr]
 
         raw = os.environ.get(_TAP_METADATA_ENV)
         parsed: dict[str, Any] | None = None
@@ -84,8 +84,11 @@ class IcebergTableStream(Stream):
                     _TAP_METADATA_ENV,
                     exc,
                 )
-        setattr(tap, cache_attr, parsed)
-        return getattr(tap, cache_attr)
+        if tap_dict is not None:
+            tap_dict[cache_attr] = parsed
+        else:
+            setattr(tap, cache_attr, parsed)
+        return parsed
 
     def _merged_tap_iceberg_metadata_overlay(self) -> dict[str, Any]:
         """Return merged metadata for this stream id from TAP_ICEBERG__METADATA.
