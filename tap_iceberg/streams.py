@@ -13,6 +13,7 @@ import pyarrow as pa
 from pyiceberg.expressions import AlwaysTrue, And, GreaterThan, LessThanOrEqual
 from pyiceberg.types import TimestamptzType
 from singer_sdk import Stream  # JSON Schema typing helpers
+from singer_sdk.helpers._typing import to_json_compatible
 
 from tap_iceberg.map_json import normalize_pyarrow_map_for_json
 from tap_iceberg.utils import generate_schema_from_pyarrow
@@ -138,29 +139,52 @@ class IcebergTableStream(Stream):
         """
         return True
 
+    @property
+    def check_sorted(self) -> bool:
+        """Tail-phase scans may yield records in arbitrary order (PyIceberg
+        manifest order). We compute the bookmark ourselves, so don't let
+        Singer SDK raise InvalidStreamSortException if it ever peeks at
+        records and finds them unsorted.
+        """
+        return False
+
     def _increment_stream_state(self, latest_record, *, context=None) -> None:  # noqa: ARG002
         """No-op: per-record bookmarks are unsafe on randomly-ordered file scans.
-        Bookmark advances only when the whole window completes (_finalize_state).
+        Bookmark advances only when the run completes (see _finalize_state).
         """
         return
 
     def _finalize_state(self, state=None) -> None:
-        """Promote the planned window end to the committed bookmark.
+        """Persist the bookmark once the record generator has completed.
 
-        Singer SDK calls this only when get_records returns cleanly (i.e. the
-        whole window was processed). If SIGTERM kills the generator mid-window,
-        this never runs and the bookmark stays where it was.
+        Backfill phase:
+            ``_planned_bookmark`` was predetermined as ``window_end`` inside
+            :py:meth:`get_records`; we write it as-is.
+        Tail phase:
+            ``_planned_bookmark`` is ``None``; we promote ``_max_observed``
+            (the maximum replication_key value yielded during this run).
+
+        If the generator is interrupted (SIGTERM, crash, eviction), Singer
+        SDK never invokes this method and the persisted bookmark in Meltano
+        Postgres stays at whatever the previous successful run left it.
         """
-        planned_end = getattr(self, "_planned_window_end", None)
-        if planned_end is not None and self.replication_key:
-            stream_state = state if state is not None else self.get_context_state(
-                None,
+        bookmark = getattr(self, "_planned_bookmark", None)
+        if bookmark is None:
+            max_observed = getattr(self, "_max_observed", None)
+            if max_observed is not None:
+                # Reuse Singer's serializer so datetimes / Decimals match the
+                # representation used elsewhere in the state payload.
+                bookmark = to_json_compatible(max_observed)
+
+        if bookmark is not None and self.replication_key:
+            stream_state = (
+                state if state is not None else self.get_context_state(None)
             )
             stream_state["replication_key"] = self.replication_key
-            stream_state["replication_key_value"] = planned_end
+            stream_state["replication_key_value"] = bookmark
             self.logger.info(
                 "Window complete; advancing bookmark to %s",
-                planned_end,
+                bookmark,
             )
         super()._finalize_state(state)
 
@@ -189,16 +213,23 @@ class IcebergTableStream(Stream):
         return isinstance(field.field_type, TimestamptzType)
 
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
-        """Yield records from a single closed time window of the Iceberg table.
+        """Yield records using one of two phases.
 
-        Window = (last_bookmark, last_bookmark + window-size-hours]. PyIceberg's
-        file/manifest order may scatter replication-key values randomly within
-        the unread tail, so we only advance the bookmark when the whole window
-        finishes (handled in _finalize_state). SIGTERM mid-window leaves the
-        bookmark untouched; the next cron retries the same window.
+        Backfill: ``window_start + window_size_hours <= now``.
+            Closed window ``(window_start, window_start + window_size_hours]``.
+            Bookmark advances by exactly ``window_size_hours`` per successful run.
+        Tail: window would overshoot ``now``.
+            Open-ended filter ``updated_at > window_start``.
+            Bookmark advances to the max ``updated_at`` observed during the run.
+
+        In both phases, the bookmark is only persisted by ``_finalize_state``
+        after the generator runs to completion. A crash mid-iteration leaves
+        the bookmark untouched; the next cron retries the same ``window_start``
+        and target dedup absorbs duplicates.
         """
         if self.replication_method != "INCREMENTAL":
-            self._planned_window_end = None
+            self._planned_bookmark = None
+            self._max_observed = None
             yield from self._get_records_full_table(context)
             return
 
@@ -222,31 +253,61 @@ class IcebergTableStream(Stream):
         if column_is_tz_aware:
             if window_start.tzinfo is None:
                 window_start = window_start.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
         else:
-            # PyIceberg's `TimestampType` rejects literals with a zone offset.
-            # Normalize aware → UTC then strip tzinfo so the column literal matches.
+            # PyIceberg's ``TimestampType`` rejects literals with a zone offset,
+            # so normalize aware -> UTC then strip tzinfo for both window_start
+            # and ``now`` so they remain comparable / serialisable.
             if window_start.tzinfo is not None:
                 window_start = window_start.astimezone(timezone.utc).replace(
                     tzinfo=None,
                 )
-        window_end = window_start + timedelta(hours=int(window_hours))
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        self.logger.info(
-            "Iceberg windowed scan: %s < %s <= %s (window=%sh, source=%s)",
-            window_start.isoformat(),
-            self.replication_key,
-            window_end.isoformat(),
-            window_hours,
-            "state" if state_bookmark else "bootstrap",
-        )
+        candidate_end = window_start + timedelta(hours=int(window_hours))
 
-        self._planned_window_end = window_end.isoformat()
+        if candidate_end <= now:
+            # ---- Backfill phase: closed (start, end] window ----
+            self._planned_bookmark = candidate_end.isoformat()
+            self._max_observed = None
+            filter_expression = And(
+                GreaterThan(self.replication_key, window_start.isoformat()),
+                LessThanOrEqual(self.replication_key, candidate_end.isoformat()),
+            )
+            self.logger.info(
+                "Iceberg backfill scan [phase=backfill]: %s < %s <= %s "
+                "(window=%sh, source=%s)",
+                window_start.isoformat(),
+                self.replication_key,
+                candidate_end.isoformat(),
+                window_hours,
+                "state" if state_bookmark else "bootstrap",
+            )
+        else:
+            # ---- Tail phase: open-ended scan, running-max bookmark ----
+            self._planned_bookmark = None
+            self._max_observed = None
+            filter_expression = GreaterThan(
+                self.replication_key, window_start.isoformat(),
+            )
+            self.logger.info(
+                "Iceberg tail scan [phase=tail]: %s < %s (running-max bookmark, "
+                "candidate_end=%s would overshoot now=%s)",
+                window_start.isoformat(),
+                self.replication_key,
+                candidate_end.isoformat(),
+                now.isoformat(),
+            )
 
-        filter_expression = And(
-            GreaterThan(self.replication_key, window_start.isoformat()),
-            LessThanOrEqual(self.replication_key, window_end.isoformat()),
-        )
-        yield from self._scan_and_yield_rows(filter_expression)
+        for record in self._scan_and_yield_rows(filter_expression):
+            # Track max only in tail phase; backfill bookmark is predetermined.
+            if self._planned_bookmark is None:
+                rk_value = record.get(self.replication_key)
+                if rk_value is not None and (
+                    self._max_observed is None or rk_value > self._max_observed
+                ):
+                    self._max_observed = rk_value
+            yield record
 
     def _get_records_full_table(self, context: dict | None) -> Iterable[dict]:
         """Non-incremental: scan the whole table."""

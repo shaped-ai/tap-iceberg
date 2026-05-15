@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -126,7 +127,8 @@ def test_incremental_reads_window_fields_from_env_wildcard(
 
     list(stream.get_records())
 
-    assert stream._planned_window_end == "2024-01-01T06:00:00+00:00"
+    assert stream._planned_bookmark == "2024-01-01T06:00:00+00:00"
+    assert stream._max_observed is None
 
 
 def test_stream_specific_metadata_overrides_wildcard(
@@ -157,7 +159,7 @@ def test_stream_specific_metadata_overrides_wildcard(
 
     list(stream.get_records())
 
-    assert stream._planned_window_end == "2024-01-08T00:00:00+00:00"
+    assert stream._planned_bookmark == "2024-01-08T00:00:00+00:00"
 
 
 def test_incremental_planned_bookmark_is_window_right_edge(mock_tap, iceberg_table_mock):
@@ -181,7 +183,7 @@ def test_incremental_planned_bookmark_is_window_right_edge(mock_tap, iceberg_tab
     iceberg_table_mock.scan.assert_called_once()
     row_filter = iceberg_table_mock.scan.call_args.kwargs["row_filter"]
     assert type(row_filter).__name__ == "And"
-    assert stream._planned_window_end == "2024-01-01T06:00:00+00:00"
+    assert stream._planned_bookmark == "2024-01-01T06:00:00+00:00"
 
 
 def test_naive_column_strips_tz_offset_from_window_literals(
@@ -211,7 +213,7 @@ def test_naive_column_strips_tz_offset_from_window_literals(
 
     list(stream.get_records())
 
-    assert stream._planned_window_end == "2026-01-01T06:00:00"
+    assert stream._planned_bookmark == "2026-01-01T06:00:00"
     row_filter = iceberg_table_mock_naive.scan.call_args.kwargs["row_filter"]
     assert type(row_filter).__name__ == "And"
 
@@ -243,7 +245,7 @@ def test_tz_aware_column_adds_utc_offset_when_input_is_naive(
 
     list(stream.get_records())
 
-    assert stream._planned_window_end == "2026-01-01T06:00:00+00:00"
+    assert stream._planned_bookmark == "2026-01-01T06:00:00+00:00"
 
 
 def test_full_table_uses_always_true_scan_and_clears_planned(mock_tap, iceberg_table_mock):
@@ -251,10 +253,224 @@ def test_full_table_uses_always_true_scan_and_clears_planned(mock_tap, iceberg_t
     stream.forced_replication_method = None
     stream.replication_key = None
 
-    stream._planned_window_end = "should-not-stick"
+    stream._planned_bookmark = "should-not-stick"
+    stream._max_observed = "should-not-stick"
     list(stream.get_records())
 
     iceberg_table_mock.scan.assert_called_once()
     row_filter = iceberg_table_mock.scan.call_args.kwargs["row_filter"]
     assert type(row_filter).__name__ == "AlwaysTrue"
-    assert stream._planned_window_end is None
+    assert stream._planned_bookmark is None
+    assert stream._max_observed is None
+
+
+# -- Tail-phase --------------------------------------------------------------
+
+
+def test_tail_phase_uses_open_ended_filter_and_running_max_bookmark(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    """When ``window_start + window_hours > now`` we switch to an open-ended
+    scan and the bookmark is the max replication_key value yielded."""
+    # window_start = now - 1h, window-size = 24h -> candidate_end is in the
+    # future, forcing tail phase.
+    start_dt = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(
+        microsecond=0,
+    )
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 24,
+                    "start-replication-key-value": start_dt.isoformat(),
+                },
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    # Three records, intentionally out of order, so we exercise the running-max
+    # comparison rather than relying on iteration order.
+    rk_mid = start_dt + timedelta(minutes=15)
+    rk_max = start_dt + timedelta(minutes=45)
+    rk_min = start_dt + timedelta(minutes=5)
+    stream._scan_and_yield_rows = lambda _filter: iter(  # type: ignore[method-assign]
+        [
+            {"id": 1, "updated_at": rk_mid},
+            {"id": 2, "updated_at": rk_max},
+            {"id": 3, "updated_at": rk_min},
+        ],
+    )
+
+    list(stream.get_records())
+
+    assert stream._planned_bookmark is None
+    assert stream._max_observed == rk_max
+
+
+def test_tail_phase_filter_is_open_ended_greater_than(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    start_dt = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(
+        microsecond=0,
+    )
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 24,
+                    "start-replication-key-value": start_dt.isoformat(),
+                },
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+
+    iceberg_table_mock.scan.assert_called_once()
+    row_filter = iceberg_table_mock.scan.call_args.kwargs["row_filter"]
+    assert type(row_filter).__name__ == "GreaterThan"
+    assert stream._planned_bookmark is None
+
+
+def test_finalize_state_writes_planned_bookmark_for_backfill(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    """After a backfill run, ``_finalize_state`` should write the predetermined
+    window end to ``replication_key_value`` and leave no progress markers."""
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 6,
+                    "start-replication-key-value": "2024-01-01T00:00:00+00:00",
+                },
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+    final_state: dict = {}
+    stream._finalize_state(final_state)
+
+    assert final_state == {
+        "replication_key": "updated_at",
+        "replication_key_value": "2024-01-01T06:00:00+00:00",
+    }
+
+
+def test_finalize_state_promotes_max_observed_for_tail(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    start_dt = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(
+        microsecond=0,
+    )
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 24,
+                    "start-replication-key-value": start_dt.isoformat(),
+                },
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    rk_max = start_dt + timedelta(minutes=42)
+    stream._scan_and_yield_rows = lambda _filter: iter(  # type: ignore[method-assign]
+        [{"id": 1, "updated_at": rk_max}],
+    )
+
+    list(stream.get_records())
+    final_state: dict = {}
+    stream._finalize_state(final_state)
+
+    assert final_state["replication_key"] == "updated_at"
+    assert final_state["replication_key_value"] == rk_max.isoformat()
+
+
+def test_finalize_state_noop_when_no_records_in_tail_phase(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    """Tail run with zero records: ``_max_observed`` stays None, no bookmark
+    is written (the previous bookmark in Meltano Postgres is preserved)."""
+    start_dt = (datetime.now(timezone.utc) - timedelta(hours=1)).replace(
+        microsecond=0,
+    )
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 24,
+                    "start-replication-key-value": start_dt.isoformat(),
+                },
+            },
+        ),
+    )
+
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+    final_state: dict = {}
+    stream._finalize_state(final_state)
+
+    assert "replication_key_value" not in final_state
+
+
+def test_check_sorted_disabled():
+    """Singer SDK must not raise InvalidStreamSortException on tail scans."""
+    assert IcebergTableStream.check_sorted.fget(  # type: ignore[union-attr]
+        MagicMock(spec=IcebergTableStream),
+    ) is False
