@@ -31,6 +31,8 @@ else:
 logger = logging.getLogger(__name__)
 
 _TAP_METADATA_ENV = "TAP_ICEBERG__METADATA"
+# MagicMock taps auto-vivify arbitrary attrs; avoid treating that as cached parse data.
+_METADATA_CACHE_ABSENT = object()
 
 
 class IcebergTableStream(Stream):
@@ -59,8 +61,9 @@ class IcebergTableStream(Stream):
         """
         tap = self._tap
         cache_attr = "_tap_iceberg_metadata_bundle_from_env_v1"
-        if hasattr(tap, cache_attr):
-            return getattr(tap, cache_attr)
+        cached = getattr(tap, cache_attr, _METADATA_CACHE_ABSENT)
+        if cached is not _METADATA_CACHE_ABSENT:
+            return cached
 
         raw = os.environ.get(_TAP_METADATA_ENV)
         parsed: dict[str, Any] | None = None
