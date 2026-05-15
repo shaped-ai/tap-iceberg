@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import pyarrow as pa
 from pyiceberg.expressions import AlwaysTrue, And, GreaterThan, LessThanOrEqual
+from pyiceberg.types import TimestamptzType
 from singer_sdk import Stream  # JSON Schema typing helpers
 
 from tap_iceberg.map_json import normalize_pyarrow_map_for_json
@@ -167,6 +168,26 @@ class IcebergTableStream(Stream):
         """Bounded by Iceberg row_filter for incremental windows, not utc_now."""
         return None
 
+    def _replication_column_is_tz_aware(self) -> bool:
+        """Return True iff the Iceberg replication column is ``timestamptz``.
+
+        PyIceberg's ``TimestampType`` (no zone) rejects ISO literals that carry an
+        offset (``ValueError: Zone offset provided, but not expected``), and
+        ``TimestamptzType`` requires an offset. We inspect the table schema so the
+        same tap works regardless of which shape the operator passes in
+        ``start-replication-key-value`` / state.
+        """
+        rk = self.replication_key
+        if not rk:
+            return False
+        try:
+            field = self._iceberg_table.schema().find_field(rk)
+        except Exception:
+            return False
+        if field is None:
+            return False
+        return isinstance(field.field_type, TimestamptzType)
+
     def get_records(self, context: dict | None = None) -> Iterable[dict]:
         """Yield records from a single closed time window of the Iceberg table.
 
@@ -197,8 +218,17 @@ class IcebergTableStream(Stream):
         window_start_str = state_bookmark or bootstrap_start
 
         window_start = datetime.fromisoformat(window_start_str)
-        if window_start.tzinfo is None:
-            window_start = window_start.replace(tzinfo=timezone.utc)
+        column_is_tz_aware = self._replication_column_is_tz_aware()
+        if column_is_tz_aware:
+            if window_start.tzinfo is None:
+                window_start = window_start.replace(tzinfo=timezone.utc)
+        else:
+            # PyIceberg's `TimestampType` rejects literals with a zone offset.
+            # Normalize aware → UTC then strip tzinfo so the column literal matches.
+            if window_start.tzinfo is not None:
+                window_start = window_start.astimezone(timezone.utc).replace(
+                    tzinfo=None,
+                )
         window_end = window_start + timedelta(hours=int(window_hours))
 
         self.logger.info(

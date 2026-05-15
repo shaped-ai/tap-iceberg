@@ -10,6 +10,11 @@ import pytest
 pytest.importorskip("pyiceberg")
 
 import pyarrow as pa
+from pyiceberg.types import (
+    NestedField,
+    TimestampType,
+    TimestamptzType,
+)
 
 from tap_iceberg.streams import IcebergTableStream
 
@@ -40,14 +45,44 @@ def mock_batch_reader():
     return reader
 
 
-@pytest.fixture
-def iceberg_table_mock(mock_batch_reader):
+def _build_iceberg_table_mock(
+    batch_reader: MagicMock,
+    *,
+    replication_column_type,
+) -> MagicMock:
     tbl = MagicMock()
-    tbl.schema.return_value.as_arrow.return_value = _minimal_arrow_schema()
+    schema_obj = MagicMock()
+    schema_obj.as_arrow.return_value = _minimal_arrow_schema()
+    rk_field = NestedField(
+        field_id=2,
+        name="updated_at",
+        field_type=replication_column_type,
+        required=False,
+    )
+    schema_obj.find_field.return_value = rk_field
+    tbl.schema.return_value = schema_obj
     scan_mock = MagicMock()
-    scan_mock.to_arrow_batch_reader.return_value = mock_batch_reader
+    scan_mock.to_arrow_batch_reader.return_value = batch_reader
     tbl.scan.return_value = scan_mock
     return tbl
+
+
+@pytest.fixture
+def iceberg_table_mock(mock_batch_reader):
+    """Default fixture: replication column is `timestamptz` (aware)."""
+    return _build_iceberg_table_mock(
+        mock_batch_reader,
+        replication_column_type=TimestamptzType(),
+    )
+
+
+@pytest.fixture
+def iceberg_table_mock_naive(mock_batch_reader):
+    """Replication column is `timestamp` (no zone)."""
+    return _build_iceberg_table_mock(
+        mock_batch_reader,
+        replication_column_type=TimestampType(),
+    )
 
 
 def test_incremental_raises_when_window_metadata_missing(
@@ -147,6 +182,68 @@ def test_incremental_planned_bookmark_is_window_right_edge(mock_tap, iceberg_tab
     row_filter = iceberg_table_mock.scan.call_args.kwargs["row_filter"]
     assert type(row_filter).__name__ == "And"
     assert stream._planned_window_end == "2024-01-01T06:00:00+00:00"
+
+
+def test_naive_column_strips_tz_offset_from_window_literals(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock_naive,
+):
+    """Operator passes ``+00:00`` but the Iceberg column is plain ``timestamp``."""
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 6,
+                    "start-replication-key-value": "2026-01-01T00:00:00+00:00",
+                },
+            },
+        ),
+    )
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock_naive)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+
+    assert stream._planned_window_end == "2026-01-01T06:00:00"
+    row_filter = iceberg_table_mock_naive.scan.call_args.kwargs["row_filter"]
+    assert type(row_filter).__name__ == "And"
+
+
+def test_tz_aware_column_adds_utc_offset_when_input_is_naive(
+    monkeypatch,
+    mock_tap,
+    iceberg_table_mock,
+):
+    """Operator passes naive ISO but the column is ``timestamptz`` — assume UTC."""
+    monkeypatch.delenv("TAP_ICEBERG__METADATA", raising=False)
+    monkeypatch.setenv(
+        "TAP_ICEBERG__METADATA",
+        json.dumps(
+            {
+                "*": {
+                    "window-size-hours": 6,
+                    "start-replication-key-value": "2026-01-01T00:00:00",
+                },
+            },
+        ),
+    )
+    stream = IcebergTableStream(mock_tap, "ns-tbl", iceberg_table_mock)
+    stream.forced_replication_method = "INCREMENTAL"
+    stream.replication_key = "updated_at"
+    stream.get_starting_replication_key_value = MagicMock(  # type: ignore[method-assign]
+        return_value=None,
+    )
+
+    list(stream.get_records())
+
+    assert stream._planned_window_end == "2026-01-01T06:00:00+00:00"
 
 
 def test_full_table_uses_always_true_scan_and_clears_planned(mock_tap, iceberg_table_mock):
