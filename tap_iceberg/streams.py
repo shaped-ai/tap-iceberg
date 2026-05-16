@@ -10,7 +10,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import pyarrow as pa
-from pyiceberg.expressions import AlwaysTrue, And, GreaterThan, LessThanOrEqual
+from pyiceberg.expressions import (
+    AlwaysTrue,
+    And,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThanOrEqual,
+)
 from pyiceberg.types import TimestamptzType
 from singer_sdk import Stream  # JSON Schema typing helpers
 from singer_sdk.helpers._typing import to_json_compatible
@@ -219,7 +225,7 @@ class IcebergTableStream(Stream):
             Closed window ``(window_start, window_start + window_size_hours]``.
             Bookmark advances by exactly ``window_size_hours`` per successful run.
         Tail: window would overshoot ``now``.
-            Open-ended filter ``updated_at > window_start``.
+            Open-ended filter ``updated_at >= window_start``.
             Bookmark advances to the max ``updated_at`` observed during the run.
 
         In both phases, the bookmark is only persisted by ``_finalize_state``
@@ -287,14 +293,14 @@ class IcebergTableStream(Stream):
             # ---- Tail phase: open-ended scan, running-max bookmark ----
             self._planned_bookmark = None
             self._max_observed = None
-            filter_expression = GreaterThan(
+            filter_expression = GreaterThanOrEqual(
                 self.replication_key, window_start.isoformat(),
             )
             self.logger.info(
-                "Iceberg tail scan [phase=tail]: %s < %s (running-max bookmark, "
+                "Iceberg tail scan [phase=tail]: %s >= %s (running-max bookmark, "
                 "candidate_end=%s would overshoot now=%s)",
-                window_start.isoformat(),
                 self.replication_key,
+                window_start.isoformat(),
                 candidate_end.isoformat(),
                 now.isoformat(),
             )

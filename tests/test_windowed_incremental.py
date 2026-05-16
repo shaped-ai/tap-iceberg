@@ -350,7 +350,7 @@ def test_tail_phase_filter_is_open_ended_greater_than(
 
     iceberg_table_mock.scan.assert_called_once()
     row_filter = iceberg_table_mock.scan.call_args.kwargs["row_filter"]
-    assert type(row_filter).__name__ == "GreaterThan"
+    assert type(row_filter).__name__ == "GreaterThanOrEqual"
     assert stream._planned_bookmark is None
 
 
