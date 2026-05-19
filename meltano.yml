@@ -37,6 +37,18 @@ plugins:
     - description: The region of the AWS Glue Data Catalog.
       label: Region
       name: client_region
+    - description: >-
+        IRSA → intermediary role ARN (CUSTOMER_DATA_ACCESS_ROLE_ARN,
+        TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN, or Meltano setting); required hop
+        when the lake/Glue reader role trusts this principal, not pod identity alone.
+      label: Customer data access role ARN
+      name: customer_data_access_role_arn
+    - description: >-
+        Glue/lake reader role ARN (often customer account); second AssumeRole hop
+        after customer_data_access_role_arn. Use without customer_* only when the
+        reader role trust allows ambient IRSA callers.
+      label: Client IAM role ARN (chained assume)
+      name: client_iam_role_arn
   loaders:
   - name: target-jsonl
     variant: andyh1203

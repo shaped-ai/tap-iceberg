@@ -2,22 +2,43 @@
 
 from __future__ import annotations
 
-import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
-from botocore.credentials import Credentials
 from pyiceberg.catalog import load_catalog
 from singer_sdk import Tap
 from singer_sdk import typing as th
 
-from tap_iceberg.utils import (
-    get_refreshable_botocore_session,
-)
+from tap_iceberg.aws_session import attach_catalog_aws_credentials
 
 if TYPE_CHECKING:
     from pyiceberg.catalog import Catalog
 
     from tap_iceberg.streams import IcebergTableStream
+
+_REDACTED_CATALOG_DEBUG_KEYS = frozenset(
+    {
+        "client.access-key-id",
+        "client.secret-access-key",
+        "client.session-token",
+        "s3.access-key-id",
+        "s3.secret-access-key",
+        "s3.session-token",
+    },
+)
+
+
+def _catalog_properties_for_debug_log(props: Mapping[str, object]) -> dict[str, object]:
+    """Avoid dumping raw AWS keys when catalog_properties are logged at DEBUG."""
+
+    safe: dict[str, object] = {}
+    for key, val in props.items():
+        if key in _REDACTED_CATALOG_DEBUG_KEYS:
+            safe[key] = "<redacted>"
+        elif key == "botocore_session":
+            safe[key] = "<botocore.Session>"
+        else:
+            safe[key] = val
+    return safe
 
 
 class TapIceberg(Tap):
@@ -69,7 +90,21 @@ class TapIceberg(Tap):
             "client_iam_role_arn",
             th.StringType,
             required=False,
-            description="The ARN of the IAM role to use for accessing S3/Glue catalog",
+            description=(
+                "Second-hop IAM role ARN (customer Glue/lake reader) after "
+                "customer_data_access_role_arn when using IRSA; trust must allow the "
+                "first-hop role (not necessarily the pod identity)"
+            ),
+        ),
+        th.Property(
+            "customer_data_access_role_arn",
+            th.StringType,
+            required=False,
+            description=(
+                "First AssumeRole hop from IRSA/pod identity (often "
+                "`CustomerS3DataAccessRole` in your ops account); also readable from env "
+                "TAP_ICEBERG_CUSTOMER_DATA_ACCESS_ROLE_ARN or CUSTOMER_DATA_ACCESS_ROLE_ARN"
+            ),
         ),
         th.Property(
             "catalog_properties",
@@ -84,7 +119,6 @@ class TapIceberg(Tap):
         from tap_iceberg.streams import (
             IcebergTableStream,
         )
-        from pyiceberg.exceptions import NoSuchPropertyException
 
         catalog = self._get_catalog()
         discovered_streams = []
@@ -97,7 +131,9 @@ class TapIceberg(Tap):
                 except (KeyError, Exception) as e:
                     if "Parameters" in str(e) or "table_type" in str(e):
                         self.logger.debug(
-                            f"Skipping {table_id}: not a valid Iceberg table ({e})."
+                            "Skipping %s: not a valid Iceberg table (%s).",
+                            table_id,
+                            e,
                         )
                         continue
                     raise
@@ -112,72 +148,22 @@ class TapIceberg(Tap):
 
     def _get_catalog(self) -> Catalog:
         """Load and return the Iceberg catalog based on the configuration."""
-        catalog_properties = self.config.get("catalog_properties", {})
+        catalog_properties = dict(self.config.get("catalog_properties", {}))
         catalog_properties.update(
             {
                 "type": self.config["catalog_type"],
-            }
+            },
         )
 
-        # Export AWS credentials to the catalog properties, and standard AWS
-        # environment variables to override any system credentials.
-        client_access_key_id = self.config.get("client_access_key_id")
-        client_secret_access_key = self.config.get("client_secret_access_key")
-        client_session_token = self.config.get("client_session_token")
-        client_region = self.config.get("client_region")
-
-        if client_region:
-            catalog_properties["client.region"] = client_region
-            os.environ["AWS_DEFAULT_REGION"] = client_region
-
-        # If client IAM role ARN is provided, use provided credentials to assume
-        # the role and create a botocore session with the assumed role, using those
-        # refreshable credentials.
-        if self.config.get("client_iam_role_arn"):
-            role_session_name = "TapIceberg"
-            self.logger.info(
-                "Assuming role %s with session name %s.",
-                self.config["client_iam_role_arn"],
-                role_session_name,
-            )
-            if client_access_key_id:
-                os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
-            if client_secret_access_key:
-                os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
-            if client_session_token:
-                os.environ["AWS_SESSION_TOKEN"] = client_session_token
-
-            base_credentials = None
-            if client_access_key_id and client_secret_access_key:
-                base_credentials = Credentials(
-                    access_key=client_access_key_id,
-                    secret_key=client_secret_access_key,
-                    token=client_session_token,
-                )
-            botocore_session = get_refreshable_botocore_session(
-                source_credentials=base_credentials,
-                assume_role_arn=self.config["client_iam_role_arn"],
-                role_session_name=role_session_name,
-            )
-            catalog_properties["botocore_session"] = botocore_session
-            catalog_properties["client.role-arn"] = self.config["client_iam_role_arn"]
-            catalog_properties["client.session-name"] = role_session_name
-        else:
-            if client_access_key_id:
-                catalog_properties["client.access-key-id"] = client_access_key_id
-                os.environ["AWS_ACCESS_KEY_ID"] = client_access_key_id
-            if client_secret_access_key:
-                catalog_properties["client.secret-access-key"] = (
-                    client_secret_access_key
-                )
-                os.environ["AWS_SECRET_ACCESS_KEY"] = client_secret_access_key
-            if client_session_token:
-                catalog_properties["client.session-token"] = client_session_token
-                os.environ["AWS_SESSION_TOKEN"] = client_session_token
+        attach_catalog_aws_credentials(
+            catalog_properties,
+            config=self.config,
+            logger=self.logger,
+        )
 
         self.logger.debug(
             "Loading Iceberg catalog with properties: %s",
-            catalog_properties,
+            _catalog_properties_for_debug_log(catalog_properties),
         )
 
         return load_catalog(
